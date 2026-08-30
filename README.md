@@ -3,6 +3,14 @@
 Analysis pipeline and interactive dashboard for Bob Loblaw's clinical trial
 data, examining how immune cell populations relate to treatment response.
 
+**Live dashboard:** https://loblaw-bio-cell-count-dashboard2-gyjnefkvjgzi5kkkv7wekn.streamlit.app/
+
+Deployed on Streamlit Community Cloud. It builds `cell_counts.db`
+automatically from `cell-count.csv` on first load (see "Self-initializing
+database" below), so no setup step is needed to view it. For local
+development, testing, or to reproduce the analysis yourself, see the
+Quickstart below.
+
 ## Quickstart (GitHub Codespaces)
 
 ```bash
@@ -20,13 +28,29 @@ python load_data.py
 streamlit run app.py
 ```
 
-`load_data.py` (`make pipeline`) must be run before the dashboard.
-`app.py` reads from `cell_counts.db`, which does not exist until the load
-script creates it. If you run the dashboard first, it will show a clear
-error telling you to run the pipeline step first, rather than crashing.
+`load_data.py` (`make pipeline`) builds `cell_counts.db` from
+`cell-count.csv` ahead of time, which is the normal local workflow. You
+don't strictly have to run it first, though: `app.py` self-initializes the
+database on its own if it's missing (see "Self-initializing database"
+below), which is what makes the Streamlit Community Cloud deployment work
+without a separate setup step.
 
 Tested with Python 3.12 and the exact package versions pinned in
 `requirements.txt`.
+
+## Self-initializing database
+
+`app.py` checks for `cell_counts.db` on startup. If it's missing but
+`cell-count.csv` is present, it builds the database automatically (calling
+the same `load_data.build_database()` function `make pipeline` uses)
+before rendering anything, showing a brief spinner while it does. If
+neither file is present, it shows a clear error instead of crashing.
+
+This matters specifically for cloud deployment: platforms like Streamlit
+Community Cloud start `app.py` directly and have no built-in "run this
+setup script first" step. Locally, this path essentially never fires,
+since `make pipeline` / `python load_data.py` already builds the database
+ahead of time.
 
 ## Tests
 
