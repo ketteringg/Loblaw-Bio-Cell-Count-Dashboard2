@@ -59,7 +59,7 @@ make test
 ```
 
 runs the full test suite (`tests/test_analysis.py` and `tests/test_app.py`,
-67 tests as of writing) via `pytest`. This also runs automatically on every
+68 tests as of writing) via `pytest`. This also runs automatically on every
 push and pull request via GitHub Actions (`.github/workflows/tests.yml`) --
 check the "Actions" tab on the repo, or the checkmark next to any commit,
 to see the result without running anything locally.
@@ -74,7 +74,7 @@ population-vs-population comparison functions, and `load_data.py`'s
 validation logic (both the hard failures and the soft warnings).
 
 `test_app.py` uses Streamlit's own `AppTest` to run the dashboard headlessly
-and check for a handful of representative scenarios per view mode (clean
+and check for a handful of representative scenarios per tab (clean
 load, the small-n warning path, the reset-filters button, each comparison
 mode, mode switching). These are the same checks that were run manually
 throughout development -- more than one caught a real bug before it
@@ -120,29 +120,40 @@ the data), and exactly 3 samples (one per timepoint). See "Schema design"
 below for how this gets normalized into `subjects` / `samples` /
 `cell_counts` tables.
 
-## Dashboard architecture: one page, a mode selector, no tabs
+## Dashboard architecture: one page, 5 tabs, each independently filterable
 
-Earlier versions of this dashboard used tabs -- first a fixed tab per
-Part 2/3/4 cohort, later two general-purpose tabs (Custom Explorer and
-Cohort Comparison). Both were replaced for the same underlying reason:
-they either duplicated what a more general view could already show, or
-they couldn't express what the person actually wanted to compare.
+Earlier versions of this dashboard used tabs differently -- first a fixed
+tab per Part 2/3/4 cohort, then two general-purpose tabs (Custom Explorer
+and Cohort Comparison), then briefly a single page with a radio-button
+mode selector instead of tabs at all. Each was replaced for a different
+reason: the fixed tabs duplicated what a more general view could already
+show; the two-tab version couldn't express every comparison someone might
+want; and the radio-selector version had a real bug -- switching away
+from a view and back silently cleared whatever filters had been set,
+because Streamlit only instantiates the currently-selected branch's
+widgets under an `if/elif`, and drops `session_state` for any widget that
+stops being instantiated. **Tabs render every tab's content on every
+rerun** (just CSS-hiding the inactive ones), so widget state survives
+switching tabs for free -- confirmed directly: selecting specific
+populations in the By Population tab, then interacting with a completely
+different tab, no longer clears that selection (`test_app.py`'s
+`test_selections_persist_across_tabs`).
 
-The dashboard is now a single page with a **view-mode selector** at the
-top: **Default**, **Responder vs Non-responder**, **By Population**, **By
-Date**, and **Custom**. Default is single-cohort exploration (cohort
-summary, average cell counts, the frequency table -- no comparison). The
-other four each compare 2 or more groups against each other, split a
-different way:
+The dashboard is 5 tabs: **Default**, **Responder vs Non-responder**, **By
+Population**, **By Date**, and **Custom**. Default is single-cohort
+exploration (cohort summary, average cell counts, the frequency table,
+and a per-population distribution boxplot -- no comparison). The other
+four each compare 2 or more groups against each other, split a different
+way:
 
 - **Responder vs Non-responder** -- always exactly 2 groups, the
   assignment's Part 3 axis.
-- **By Population** -- select 2+ cell populations and compare them
-  directly against each other *within* the same cohort. This uses a
-  **paired test** (Wilcoxon signed-rank), not the unpaired Mann-Whitney
-  used everywhere else, because two populations' percentages from the
-  same sample aren't independent samples -- see "Statistical approach"
-  below for why that distinction matters.
+- **By Population** -- select 2+ cell populations (all 5 by default) and
+  compare them directly against each other *within* the same cohort.
+  This uses a **paired test** (Wilcoxon signed-rank), not the unpaired
+  Mann-Whitney used everywhere else, because two populations'
+  percentages from the same sample aren't independent samples -- see
+  "Statistical approach" below for why that distinction matters.
 - **By Date** -- select 2 or all 3 timepoints and compare them against
   each other, per population. Selecting 3 timepoints tests every pair
   (3 pairs), not just one.
@@ -158,10 +169,15 @@ statistical cost of choosing pairwise tests over a single omnibus test
 (e.g. Kruskal-Wallis) -- worth knowing before comparing many groups at
 once.
 
+Responder/Non-responder and Cohort A/B deliberately share the exact same
+2 colors (blue / reddish purple, Okabe-Ito) -- both are "first group vs.
+second group in a two-way split," so one consistent color pairing is used
+throughout rather than two different ones.
+
 The required, graded Part 2-4 answers can still be reproduced exactly:
-Part 2 and Part 4's baseline summary from Default mode's frequency table
-and cohort summary with the right filters applied, and Part 3 from
-Responder vs Non-responder mode with the miraclib+PBMC filters applied
+Part 2 and Part 4's baseline summary from the Default tab's frequency
+table and cohort summary with the right filters applied, and Part 3 from
+the Responder vs Non-responder tab with the miraclib+PBMC filters applied
 (documented in the assignment spec).
 
 ## Schema design
@@ -281,9 +297,9 @@ not. This is the headline finding for Part 3.
 
 **Paired vs. unpaired tests, and why it matters which one you use.**
 Every comparison in this dashboard is Mann-Whitney (unpaired) on CLR
-values, *except* By Population mode, which uses the **Wilcoxon
+values, *except* the By Population tab, which uses the **Wilcoxon
 signed-rank test** (paired) instead. The reason is structural, not a
-preference: Responder vs. Non-responder, By Date, and Custom mode all
+preference: Responder vs. Non-responder, By Date, and Custom all
 compare *different sets of samples* against each other -- genuinely
 independent groups, which is exactly what Mann-Whitney assumes. By
 Population mode compares *the same samples'* `b_cell%` against their
@@ -313,7 +329,7 @@ names are passed in, so it recomputes against whatever data is actually
 loaded rather than reporting a historical fact about this one CSV. That's
 what makes it valid if a different or updated dataset arrives: the check
 is code, not documentation. It's surfaced live in the dashboard, in an
-expander under Responder vs Non-responder mode.
+expander under the Responder vs Non-responder tab.
 
 For the current dataset, in the Part 3 cohort: **response is balanced
 across project** (49.8% vs. 49.8%, p≈1.0) and **across sex** (p≈0.27) --
@@ -323,7 +339,7 @@ absent; this is a simple heuristic (p > 0.05), not a formal equivalence
 test, and it only covers the two variables checked (project, sex), not
 every possible confounder.
 
-## The four comparison modes
+## The four comparison tabs
 
 **Responder vs Non-responder** lets you filter on any combination of
 variables (response itself isn't offered as a pre-filter -- it's the
