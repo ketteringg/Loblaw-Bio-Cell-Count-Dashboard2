@@ -20,11 +20,22 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Test artifacts (if a test suite is added later)
+# Test artifacts
 .pytest_cache/
 .coverage
 htmlcov/
 
-# Uncomment if you'd rather regenerate the database on every clone instead
-# of committing the binary file:
-# cell_counts.db
+# Generated build artifacts. Never commit these: they're fully
+# regenerable from cell-count.csv + the code (make pipeline / app.py's
+# self-init both rebuild cell_counts.db from scratch), and a committed
+# derived file can silently drift out of sync with the source CSV or
+# code if either changes without someone remembering to regenerate and
+# re-commit it. If any of these already exist in the repo's git history,
+# `git rm --cached <file>` once to actually untrack them -- adding a
+# .gitignore entry alone doesn't retroactively remove a tracked file.
+cell_counts.db
+frequency_table.csv
+stats_results.csv
+boxplot_responders.png
+baseline_melanoma_samples.csv
+part4_summary.txt
