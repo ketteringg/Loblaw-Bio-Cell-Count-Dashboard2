@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Streamlit local cache/logs (NOT .streamlit/config.toml -- that's the
+# project's theme file and should be committed)
+.streamlit/secrets.toml
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Editor/IDE
+.vscode/
+.idea/
+
+# Test artifacts (if a test suite is added later)
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Uncomment if you'd rather regenerate the database on every clone instead
+# of committing the binary file:
+# cell_counts.db
