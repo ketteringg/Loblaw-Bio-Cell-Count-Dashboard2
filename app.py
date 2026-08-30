@@ -24,6 +24,7 @@ import streamlit as st
 from analysis import (
     POPULATIONS,
     SMALL_N_THRESHOLD,
+    format_pvalue,
     run_stats_test_safe,
     get_full_dataset,
     filter_dataset,
@@ -209,17 +210,6 @@ def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, 
         if color_col == "population":
             fig_pct.update_layout(showlegend=False)
         st.plotly_chart(fig_pct, width='stretch', key=f"{key_prefix}_avg_pct_chart")
-
-
-def format_pvalue(p) -> str:
-    """Formats a p-value for display: avoids showing a bare '0' for a
-    genuinely tiny (but nonzero) p-value, which would misleadingly imply
-    an exact zero rather than 'too small to show at this precision'."""
-    if pd.isna(p):
-        return ""
-    if p < 0.00001:
-        return "<0.00001"
-    return f"{p:.5f}"
 
 
 def render_stats_messages(status: str, results: pd.DataFrame | None):
