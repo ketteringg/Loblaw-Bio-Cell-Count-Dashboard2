@@ -138,9 +138,10 @@ def hex_to_rgba(hex_color: str, alpha: float) -> str:
 def style_population_column(df: pd.DataFrame, column: str = "population") -> "pd.io.formats.style.Styler":
     """Colors the given column's cells using POP_COLORS, so population
     names read consistently with the same colors used in every chart.
-    Background is a partial-opacity tint (not a solid fill), matching the
-    softer, less saturated look used for population colors throughout the
-    dashboard. Text is dark, not white: the population palette is
+    Background opacity matches POPULATION_BACKGROUND_OPACITY, the same
+    value used for the boxplot's facet backgrounds and the average-count
+    bar charts, so population color opacity is consistent everywhere it
+    appears. Text is dark, not white: the population palette is
     intentionally soft/light, and white text on these backgrounds falls
     well short of readable contrast (verified: ~2:1 at best, vs. a 4.5:1
     minimum for body text). Dark text gives 9:1+ on every population
@@ -150,7 +151,7 @@ def style_population_column(df: pd.DataFrame, column: str = "population") -> "pd
         if col.name != column:
             return ["" for _ in col]
         return [
-            f"background-color: {hex_to_rgba(POP_COLORS.get(v, '#F1F2F4'), 0.5)}; "
+            f"background-color: {hex_to_rgba(POP_COLORS.get(v, '#F1F2F4'), POPULATION_BACKGROUND_OPACITY)}; "
             f"color: #1A2733; font-weight: 600;"
             for v in col
         ]
@@ -288,27 +289,27 @@ def render_boxplot(
     y_range = [max(0, data_min - (data_max - data_min) * 0.05), data_max + top_padding]
 
     # Gridline color is set explicitly (not left at Plotly's default pale
-    # gray) because the default has poor contrast against the now-fully-
-    # opaque population background tints -- verified via WCAG contrast
-    # ratio against all 5 population colors: the default gray scores as
-    # low as 1.76:1 (well under the 3:1 minimum for visible graphical
-    # elements), while pure black is the only candidate tested that clears
-    # 3:1 against every population color (worst case 4.12:1, on
-    # cd8_t_cell's blue-violet background). zeroline is explicitly
-    # disabled: the y-axis range's lower bound lands exactly on 0 (see
-    # y_range above), so Plotly's separate zero-line was stacking directly
-    # on top of the regular gridline at that same position, rendering as
-    # a visibly thicker line there than at any other tick -- confirmed by
-    # checking the computed range, not just guessed.
+    # gray) because the default has poor contrast against the population
+    # background tints -- verified via WCAG contrast ratio against all 5
+    # population colors at full opacity (the worst case): the default
+    # gray scores as low as 1.76:1 (well under the 3:1 minimum for visible
+    # graphical elements), while pure black is the only candidate tested
+    # that clears 3:1 against every population color (worst case 4.12:1,
+    # on cd8_t_cell's blue-violet background). Now that the background
+    # opacity is much lower (POPULATION_BACKGROUND_OPACITY), contrast is
+    # even better than that worst-case check, so black remains a safe
+    # choice. zeroline is explicitly disabled: the y-axis range's lower
+    # bound lands exactly on 0 (see y_range above), so Plotly's separate
+    # zero-line was stacking directly on top of the regular gridline at
+    # that same position, rendering as a visibly thicker line there than
+    # at any other tick -- confirmed by checking the computed range, not
+    # just guessed. Tick labels are shown on every facet (not just the
+    # first), even though the scale is shared, per explicit request.
     fig.update_yaxes(
         matches="y", range=y_range,
         gridcolor="#000000", gridwidth=0.5,
-        zeroline=False,
+        zeroline=False, showticklabels=True,
     )
-    for axis_name in fig.layout:
-        if axis_name.startswith("yaxis") and axis_name != "yaxis":
-            fig.layout[axis_name].showticklabels = False
-    fig.layout.yaxis.showticklabels = True
 
     # Native x-axis tick labels (which would show "Cohort A" / "Cohort B"
     # etc. under each box, all in one uniform color) are hidden -- Plotly
@@ -398,9 +399,11 @@ def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, 
     solid pattern and the *second* a diagonal-hatch fill, which reads as
     "not fully filled in" rather than as a deliberate texture -- removed
     in favor of just keeping the Okabe-Ito color choices themselves
-    colorblind-safe, which they already are). Population bars are given
-    reduced opacity, to match the softer/less saturated population color
-    palette used elsewhere in the dashboard."""
+    colorblind-safe, which they already are). Population bars use
+    POPULATION_BACKGROUND_OPACITY, the same opacity value used everywhere
+    else population color appears (boxplot facet backgrounds, population
+    table cells), for consistency across the dashboard. Gridlines match
+    the boxplot's (black, thin) for the same reason."""
     chart_col1, chart_col2 = st.columns(2)
     with chart_col1:
         fig_count = px.bar(
@@ -410,10 +413,10 @@ def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, 
             labels={"avg_count": "avg. cell count"},
             category_orders={"population": POPULATIONS},
         )
-        fig_count.update_yaxes(tickformat=",")
+        fig_count.update_yaxes(tickformat=",", gridcolor="#000000", gridwidth=0.5)
         if color_col == "population":
             fig_count.update_layout(showlegend=False)
-            fig_count.update_traces(marker_opacity=0.75)
+            fig_count.update_traces(marker_opacity=POPULATION_BACKGROUND_OPACITY)
         else:
             fig_count.update_traces(marker_line_width=1.5, selector=lambda t: True)
             for trace in fig_count.data:
@@ -427,9 +430,10 @@ def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, 
             labels={"avg_percentage": "avg. % of total cells"},
             category_orders={"population": POPULATIONS},
         )
+        fig_pct.update_yaxes(gridcolor="#000000", gridwidth=0.5)
         if color_col == "population":
             fig_pct.update_layout(showlegend=False)
-            fig_pct.update_traces(marker_opacity=0.75)
+            fig_pct.update_traces(marker_opacity=POPULATION_BACKGROUND_OPACITY)
         else:
             fig_pct.update_traces(marker_line_width=1.5, selector=lambda t: True)
             for trace in fig_pct.data:
