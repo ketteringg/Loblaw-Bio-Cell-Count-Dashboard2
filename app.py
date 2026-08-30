@@ -270,6 +270,20 @@ def render_boxplot(
 
     fig.update_layout(legend_title_text="")
 
+    # Background tint per facet, in that facet's population color -- a
+    # subtle visual cue reinforcing which population you're looking at,
+    # separate from the box fill (which encodes group). layer="below" is
+    # set explicitly rather than relying on Plotly's default, so this is
+    # guaranteed to sit behind the box traces, not obscure them.
+    for i, pop in enumerate(present_populations):
+        xaxis_suffix = "" if i == 0 else str(i + 1)
+        fig.add_shape(
+            type="rect", xref=f"x{xaxis_suffix} domain", yref=f"y{xaxis_suffix} domain",
+            x0=0, x1=1, y0=0, y1=1,
+            fillcolor=POP_COLORS[pop], opacity=0.12, line_width=0,
+            layer="below",
+        )
+
     # Explicit text label with each group's actual name, positioned in the
     # headroom reserved above via y_range, well clear of the plotted data.
     label_y = data_max + top_padding * 0.4
@@ -295,6 +309,27 @@ def render_boxplot(
             if a.text.split("=")[-1] == pop else a
         )
     return fig
+
+
+def render_population_key(populations: list[str]):
+    """Renders a small colored-swatch key for the population background
+    tints, as plain Streamlit HTML entirely OUTSIDE the Plotly figure --
+    not part of its (auto-positioned) legend. This guarantees it can
+    never overlap the plot area, unlike an in-figure legend, which can
+    crowd or overlap the chart on narrow viewports or with many entries."""
+    swatches = "".join(
+        f"<span style='display:inline-flex; align-items:center; margin-right:14px;'>"
+        f"<span style='display:inline-block; width:10px; height:10px; "
+        f"border-radius:50%; background:{POP_COLORS[pop]}; margin-right:5px;'></span>"
+        f"<span style='font-size:12px; color:#4B5563;'>{pop}</span></span>"
+        for pop in populations if pop in POP_COLORS
+    )
+    st.markdown(
+        f"<div style='margin-top:6px; margin-bottom:2px;'>"
+        f"<span style='font-size:12px; color:#6B7280; margin-right:10px;'>"
+        f"Facet background:</span>{swatches}</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, key_prefix: str):
@@ -721,6 +756,7 @@ with tab_explorer:
                     group_colors=[RESPONSE_COLORS["Responder"], RESPONSE_COLORS["Non-responder"]],
                 )
                 st.plotly_chart(fig, width='stretch', key="explorer_tab_boxplot", config=PLOTLY_CONFIG)
+                render_population_key(results["population"].tolist())
                 display_results = results.drop(columns=["status", "small_n_warning"]).copy()
                 display_results["p_value"] = display_results["p_value"].apply(format_pvalue)
                 display_results["p_value_bonferroni"] = display_results["p_value_bonferroni"].apply(format_pvalue)
@@ -796,6 +832,7 @@ with tab_compare:
             st.write(f"**Distribution comparison: {label_a} vs {label_b}**")
             fig_box = render_cohort_comparison_boxplot(cohort_a, cohort_b, label_a, label_b, results)
             st.plotly_chart(fig_box, width='stretch', key="compare_boxplot", config=PLOTLY_CONFIG)
+            render_population_key(results["population"].tolist())
 
         st.write("")
         with st.container(border=True):
