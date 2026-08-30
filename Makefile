@@ -1,4 +1,4 @@
-.PHONY: setup pipeline dashboard clean
+.PHONY: setup pipeline dashboard test clean
 
 setup:
 	pip install -r requirements.txt
@@ -8,6 +8,10 @@ pipeline:
 
 dashboard:
 	python3 -m streamlit run app.py
+
+test:
+	pip install -r requirements-dev.txt
+	pytest -v
 
 clean:
 	rm -f cell_counts.db
