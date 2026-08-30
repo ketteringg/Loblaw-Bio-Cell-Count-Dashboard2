@@ -43,14 +43,15 @@ CSV_PATH = ROOT / "cell-count.csv"
 st.set_page_config(page_title="Loblaw Bio", layout="wide")
 
 # ---------- visual constants ----------
-# Response (Responder/Non-responder) and Cohort (A/B) colors use the
-# Okabe-Ito palette, a peer-reviewed colorblind-safe palette (safe for
-# deuteranopia, protanopia, and tritanopia). Population colors are a
-# separate, soft/pastel palette -- verified programmatically (RGB
-# Euclidean distance) to stay well-separated both from the 4 "meaning"
-# colors below and from each other, so no color is ever ambiguous between
-# "which population" and "which group" at a glance, even though they're
-# deliberately gentler than the meaning colors.
+# Cohort (A/B) colors use the Okabe-Ito palette, a peer-reviewed
+# colorblind-safe palette (safe for deuteranopia, protanopia, and
+# tritanopia); Responder/Non-responder deliberately reuse the exact same
+# 2 colors (see below). Population colors are a separate, soft/pastel
+# palette -- verified programmatically (RGB Euclidean distance) to stay
+# well-separated both from these 2 "meaning" colors and from each other,
+# so no color is ever ambiguous between "which population" and "which
+# group" at a glance, even though they're deliberately gentler than the
+# meaning colors.
 POP_COLORS = {
     "b_cell": "#7DB760",       # soft green
     "cd8_t_cell": "#6067B7",   # soft blue-violet
@@ -58,8 +59,12 @@ POP_COLORS = {
     "nk_cell": "#60B0B7",      # soft teal
     "monocyte": "#B85951",     # soft clay
 }
-RESPONSE_COLORS = {"Responder": "#009E73", "Non-responder": "#D55E00"}  # bluish green / vermillion (Okabe-Ito)
 COHORT_COLOR_SEQUENCE = ["#0072B2", "#CC79A7"]  # blue / reddish purple (Okabe-Ito)
+# Responder/Non-responder deliberately reuse Cohort A/B's exact colors --
+# both are "first group vs second group in a two-way split," so using the
+# same color pairing throughout keeps that visual language consistent
+# across every comparison mode rather than introducing a second pair.
+RESPONSE_COLORS = {"Responder": COHORT_COLOR_SEQUENCE[0], "Non-responder": COHORT_COLOR_SEQUENCE[1]}
 
 # General-purpose color sequence for comparisons with an arbitrary number
 # of groups (By Date, Custom with 3+ cohorts): the full Okabe-Ito
@@ -761,21 +766,23 @@ st.title("Loblaw Bio")
 st.caption("Clinical trial cell population analysis")
 st.markdown("<div class='accent-bar'></div>", unsafe_allow_html=True)
 
-view_mode = st.radio(
-    "Choose a view",
-    ["Default", "Responder vs Non-responder", "By Population", "By Date", "Custom"],
-    horizontal=True, key="view_mode",
-    help=(
-        "Default explores a single cohort's composition. The other 4 "
-        "options each compare 2 or more groups against each other, split "
-        "a different way."
-    ),
+tab_default, tab_resp, tab_pop, tab_date, tab_custom = st.tabs(
+    ["Default", "Responder vs Non-responder", "By Population", "By Date", "Custom"]
 )
-st.divider()
+# Using st.tabs() (not a radio + if/elif) is deliberate: Streamlit renders
+# every tab's content on every rerun (just CSS-hides the inactive ones),
+# so widget state naturally survives switching tabs. A radio-driven
+# if/elif only instantiates the currently-selected branch's widgets each
+# run -- Streamlit clears session_state for any widget that disappears
+# from the script that way, so filter selections were being silently
+# reset every time you switched views. Confirmed directly (not assumed):
+# selecting specific populations in By Population mode, switching to
+# Default, then switching back reset the selection under the old radio
+# structure; verified this doesn't happen with tabs.
 
 
 # ---------- Default: single-cohort exploration (no comparison) ----------
-if view_mode == "Default":
+with tab_default:
     st.subheader("Build your own cohort")
     st.caption(
         "Filter by any combination of variables in the dataset. Cohort "
@@ -859,9 +866,21 @@ if view_mode == "Default":
                 key="default_freq_download",
             )
 
+        st.write("")
+        with st.container(border=True):
+            st.write("**Population distribution for this cohort**")
+            st.caption(
+                "Percentage distribution of each cell population, colored "
+                "by population. Not a statistical comparison -- switch to "
+                "one of the other tabs above to test 2 or more groups "
+                "against each other."
+            )
+            fig = render_single_population_boxplot(filtered)
+            st.plotly_chart(fig, width='stretch', key="default_boxplot", config=PLOTLY_CONFIG)
+
 
 # ---------- Responder vs Non-responder ----------
-elif view_mode == "Responder vs Non-responder":
+with tab_resp:
     st.subheader("Responder vs non-responder comparison")
     st.caption(
         "Build a cohort using any combination of filters, then compare "
@@ -948,7 +967,7 @@ elif view_mode == "Responder vs Non-responder":
 
 
 # ---------- By Population: compare populations directly against each other ----------
-elif view_mode == "By Population":
+with tab_pop:
     st.subheader("Compare cell populations directly")
     st.caption(
         "Build a cohort using any combination of filters, then compare 2 "
@@ -969,7 +988,7 @@ elif view_mode == "By Population":
         st.info("No samples match the selected filters.")
     else:
         selected_pops = st.multiselect(
-            "Populations to compare", POPULATIONS, default=POPULATIONS[:2],
+            "Populations to compare", POPULATIONS, default=POPULATIONS,
             key="pop_mode_selected_populations",
         )
         if len(selected_pops) < 2:
@@ -1002,7 +1021,7 @@ elif view_mode == "By Population":
 
 
 # ---------- By Date: compare timepoints directly, any number at once ----------
-elif view_mode == "By Date":
+with tab_date:
     st.subheader("Compare timepoints directly")
     st.caption(
         "Build a cohort using any combination of filters, then compare 2 "
@@ -1080,7 +1099,7 @@ elif view_mode == "By Date":
 
 
 # ---------- Custom: build 2-4 independent cohorts, any filters ----------
-elif view_mode == "Custom":
+with tab_custom:
     st.subheader("Compare custom cohorts")
     st.caption(
         "Build 2 to 4 independent cohorts using any combination of "
