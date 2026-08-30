@@ -7,7 +7,7 @@ pipeline:
 	python load_data.py
 
 dashboard:
-	streamlit run app.py
+	python3 -m streamlit run app.py
 
 clean:
 	rm -f cell_counts.db
