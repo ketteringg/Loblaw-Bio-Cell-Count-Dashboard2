@@ -208,23 +208,21 @@ def render_boxplot(
     signature color (e.g. Responder/Non-responder or Cohort A/B) --
     exactly matching the legend swatch, so there's no mismatch between
     what the legend shows and what's actually drawn. The population name
-    itself is shown as each facet's x-axis title, below the group tick
-    labels (Cohort A / Cohort B etc.) at the bottom -- not as a color, and
-    not at the top -- since the facet title area is reserved for the
-    p-value instead. Box outlines (and median lines -- Plotly's Box trace
-    shares one `line` property for both) use a darker, fully opaque shade
-    of the same group color; the fill itself is drawn with slightly less
-    than full opacity (an rgba() fillcolor, while line/marker stay solid
-    hex) so only the fill -- not the outline or median line -- is
-    affected. An explicit text label with each group's actual name is
-    drawn above every box pair, positioned in the padding added above the
-    data range so it never overlaps the boxes/whiskers themselves. Each
-    facet's background is tinted with that population's own color at full
-    strength (matching every other use of POP_COLORS in the dashboard),
-    using layer="below" -- which Plotly specifically defines as below
-    gridlines (not just below traces), so gridlines and the box traces
-    themselves both still render on top regardless of the background's
-    opacity.
+    is shown as each facet's x-axis title at the very bottom; the group
+    names (Cohort A / Cohort B etc.) are shown just above that, in each
+    group's own color -- replacing Plotly's native x-axis tick labels,
+    which don't support per-tick coloring. The top facet-title area is
+    reserved for the p-value only. Box outlines (and median lines --
+    Plotly's Box trace shares one `line` property for both) use a darker,
+    fully opaque shade of the same group color; the fill itself is drawn
+    with slightly less than full opacity (an rgba() fillcolor, while
+    line/marker stay solid hex) so only the fill -- not the outline or
+    median line -- is affected. Each facet's background is tinted with
+    that population's own color at full strength (matching every other
+    use of POP_COLORS in the dashboard), using layer="below" -- which
+    Plotly specifically defines as below gridlines (not just below
+    traces), so gridlines and the box traces themselves both still render
+    on top regardless of the background's opacity.
     """
     groups = group_order or sorted(comparison_df[x_col].dropna().unique())[:2]
     colors = group_colors or ["#6B7280", "#9CA3AF"]
@@ -285,18 +283,30 @@ def render_boxplot(
     # low as 1.76:1 (well under the 3:1 minimum for visible graphical
     # elements), while pure black is the only candidate tested that clears
     # 3:1 against every population color (worst case 4.12:1, on
-    # cd8_t_cell's blue-violet background).
+    # cd8_t_cell's blue-violet background). zeroline is explicitly
+    # disabled: the y-axis range's lower bound lands exactly on 0 (see
+    # y_range above), so Plotly's separate zero-line was stacking directly
+    # on top of the regular gridline at that same position, rendering as
+    # a visibly thicker line there than at any other tick -- confirmed by
+    # checking the computed range, not just guessed.
     fig.update_yaxes(
         matches="y", range=y_range,
-        gridcolor="#000000", gridwidth=1,
-        zerolinecolor="#000000", zerolinewidth=1,
+        gridcolor="#000000", gridwidth=0.5,
+        zeroline=False,
     )
     for axis_name in fig.layout:
         if axis_name.startswith("yaxis") and axis_name != "yaxis":
             fig.layout[axis_name].showticklabels = False
     fig.layout.yaxis.showticklabels = True
 
-    fig.update_layout(legend_title_text="")
+    # Native x-axis tick labels (which would show "Cohort A" / "Cohort B"
+    # etc. under each box, all in one uniform color) are hidden -- Plotly
+    # doesn't support coloring individual tick labels differently, so the
+    # group names are drawn as custom annotations instead, colored to each
+    # group's own color, positioned just below the plot area.
+    fig.update_xaxes(showticklabels=False)
+
+    fig.update_layout(legend_title_text="", margin=dict(b=90))
 
     # Background tint per facet, in that facet's population color at full
     # strength (same POP_COLORS value used everywhere else, undiluted).
@@ -309,28 +319,31 @@ def render_boxplot(
             layer="below",
         )
 
-    # Explicit text label with each group's actual name, positioned in the
-    # headroom reserved above via y_range, well clear of the plotted data.
-    label_y = data_max + top_padding * 0.4
+    # Group-name labels, color-coded to each group's own color, positioned
+    # just below the plot area (replacing the hidden native tick labels).
+    # The population name (x-axis title, added below) uses `standoff` to
+    # sit further down still, so the two never collide.
     for i, pop in enumerate(present_populations):
         xaxis_suffix = "" if i == 0 else str(i + 1)
-        yaxis_ref = f"y{xaxis_suffix}"
         for idx, group in enumerate(groups):
             fig.add_annotation(
-                x=group, y=label_y,
-                xref=f"x{xaxis_suffix}", yref=yaxis_ref,
+                x=group, y=0,
+                xref=f"x{xaxis_suffix}", yref=f"y{xaxis_suffix} domain",
                 text=group, showarrow=False,
                 font=dict(size=10, color=colors[idx]),
-                yanchor="bottom",
+                yanchor="top", yshift=-6,
             )
 
-    # Population name moves to each facet's x-axis title, below the group
-    # tick labels (Cohort A / Cohort B etc.) at the very bottom -- not a
-    # color, and not at the top. The top facet-title area is reserved for
-    # the p-value only.
+    # Population name moves to each facet's x-axis title, below the
+    # color-coded group labels added above -- not a color, and not at the
+    # top. The top facet-title area is reserved for the p-value only.
+    # standoff pushes the title further from the axis than Plotly's
+    # default, leaving room for the group labels in between.
     for i, pop in enumerate(present_populations):
         xaxis_suffix = "" if i == 0 else str(i + 1)
-        fig.layout[f"xaxis{xaxis_suffix}"].title = dict(text=pop, font=dict(size=11, color="#374151"))
+        fig.layout[f"xaxis{xaxis_suffix}"].title = dict(
+            text=pop, font=dict(size=11, color="#374151"), standoff=28,
+        )
 
     for i, pop in enumerate(present_populations):
         p_rows = stats_df.loc[stats_df["population"] == pop, "p_value"]
