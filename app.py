@@ -65,6 +65,17 @@ COHORT_COLOR_SEQUENCE = ["#0072B2", "#CC79A7"]  # blue / reddish purple (Okabe-I
 # background tint underneath shows through a little.
 GROUP_FILL_ALPHA = 0.85
 
+# Population background tint opacity (facet backgrounds in render_boxplot).
+# Kept low: at full opacity, the strongly saturated, differently-hued
+# backgrounds behind each facet created a real optical effect where
+# identical gridlines appeared to have different thickness depending on
+# which background they crossed -- confirmed the gridlines themselves
+# were byte-for-byte identical across every facet (same width, color,
+# range, and auto-computed tick spacing), so the apparent
+# inconsistency was the background contrast, not the lines. A much
+# lighter tint (same hue, far less opaque) avoids that effect.
+POPULATION_BACKGROUND_OPACITY = 0.15
+
 CUSTOM_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -218,11 +229,11 @@ def render_boxplot(
     with slightly less than full opacity (an rgba() fillcolor, while
     line/marker stay solid hex) so only the fill -- not the outline or
     median line -- is affected. Each facet's background is tinted with
-    that population's own color at full strength (matching every other
-    use of POP_COLORS in the dashboard), using layer="below" -- which
-    Plotly specifically defines as below gridlines (not just below
-    traces), so gridlines and the box traces themselves both still render
-    on top regardless of the background's opacity.
+    that population's own color (same hex value used everywhere else),
+    at a low opacity (POPULATION_BACKGROUND_OPACITY), using layer="below"
+    -- which Plotly specifically defines as below gridlines (not just
+    below traces), so gridlines and the box traces themselves both still
+    render on top regardless of the background's opacity.
     """
     groups = group_order or sorted(comparison_df[x_col].dropna().unique())[:2]
     colors = group_colors or ["#6B7280", "#9CA3AF"]
@@ -308,14 +319,15 @@ def render_boxplot(
 
     fig.update_layout(legend_title_text="", margin=dict(b=90))
 
-    # Background tint per facet, in that facet's population color at full
-    # strength (same POP_COLORS value used everywhere else, undiluted).
+    # Background tint per facet, in that facet's population color -- same
+    # hue/hex value used everywhere else, at reduced opacity (see
+    # POPULATION_BACKGROUND_OPACITY above for why).
     for i, pop in enumerate(present_populations):
         xaxis_suffix = "" if i == 0 else str(i + 1)
         fig.add_shape(
             type="rect", xref=f"x{xaxis_suffix} domain", yref=f"y{xaxis_suffix} domain",
             x0=0, x1=1, y0=0, y1=1,
-            fillcolor=POP_COLORS[pop], opacity=1.0, line_width=0,
+            fillcolor=POP_COLORS[pop], opacity=POPULATION_BACKGROUND_OPACITY, line_width=0,
             layer="below",
         )
 
