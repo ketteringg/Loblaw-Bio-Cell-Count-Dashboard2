@@ -409,11 +409,21 @@ def filters_with_expander(full: pd.DataFrame, key_prefix: str, label: str = "Fil
 
 
 if not DB_PATH.exists():
-    st.error(
-        f"Database not found at {DB_PATH}. Run `python load_data.py` first "
-        "to build it from cell-count.csv."
-    )
-    st.stop()
+    if CSV_PATH.exists():
+        # Self-initialize: this matters for cloud deployment (e.g. Streamlit
+        # Community Cloud) where there's no separate "run load_data.py
+        # first" step available. Locally, `make pipeline` / `python
+        # load_data.py` still works fine and this branch just won't fire
+        # since the .db will already exist.
+        with st.spinner("First run: building the database from cell-count.csv..."):
+            from load_data import build_database
+            build_database()
+    else:
+        st.error(
+            f"Neither {DB_PATH.name} nor {CSV_PATH.name} was found. "
+            "Make sure cell-count.csv is included in the deployment."
+        )
+        st.stop()
 
 mtime = _csv_mtime()
 full = cached_full_dataset(mtime)
