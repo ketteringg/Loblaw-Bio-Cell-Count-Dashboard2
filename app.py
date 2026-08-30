@@ -25,6 +25,7 @@ from analysis import (
     POPULATIONS,
     SMALL_N_THRESHOLD,
     format_pvalue,
+    check_group_balance,
     run_stats_test_safe,
     get_full_dataset,
     filter_dataset,
@@ -180,22 +181,81 @@ def render_boxplot(
     comparison_df: pd.DataFrame,
     stats_df: pd.DataFrame,
     x_col: str = "response_label",
-    color_map: dict | None = None,
+    group_order: list[str] | None = None,
 ):
-    """Boxplot faceted by population, annotated with each facet's p-value."""
+    """Boxplot faceted by population. Color encodes cell population
+    (consistent with POP_COLORS used throughout the dashboard, with a
+    legend key here). The two x_col groups (e.g. Responder/Non-responder,
+    or Cohort A/Cohort B) are deliberately NOT color-coded, since color is
+    already reserved for population -- they're differentiated instead by
+    box outline width, opacity, and outlier-point marker shape. Plotly's
+    Box trace doesn't support dashed outlines or hatched fills (verified
+    directly against the installed Plotly version), so these are the real
+    available differentiators, not a fallback of convenience.
+    """
+    groups = group_order or sorted(comparison_df[x_col].dropna().unique())[:2]
+
     fig = px.box(
         comparison_df, x=x_col, y="percentage", facet_col="population",
         facet_col_wrap=5, points="outliers",
-        category_orders={"population": POPULATIONS},
+        category_orders={"population": POPULATIONS, x_col: groups},
         labels={"percentage": "% of total cells", x_col: ""},
-        color=x_col, color_discrete_map=color_map,
+        color=x_col,  # forces one trace per (facet, group); overridden below
     )
-    # Share one y-axis scale across every population facet, so bar/box
-    # heights are directly comparable at a glance (a population with a
-    # 40% avg looks visibly larger than one with a 5% avg, rather than
-    # each facet being independently rescaled to fill its own panel).
-    fig.update_yaxes(matches="y", showticklabels=True)
-    fig.update_layout(showlegend=True, legend_title_text="")
+
+    # Traces are ordered facet-major, 2 per facet (one per group), in the
+    # order given by category_orders -- verified empirically against this
+    # Plotly version. group_style[0] applies to groups[0] (e.g.
+    # Responder / Cohort A), group_style[1] to groups[1].
+    group_style = [
+        dict(line_width=1.5, opacity=1.0, symbol="circle"),
+        dict(line_width=3.5, opacity=0.55, symbol="diamond"),
+    ]
+    for i, trace in enumerate(fig.data):
+        pop = POPULATIONS[i // 2]
+        pop_color = POP_COLORS[pop]
+        style = group_style[0] if trace.name == groups[0] else group_style[1]
+        trace.fillcolor = pop_color
+        trace.line.color = pop_color
+        trace.line.width = style["line_width"]
+        trace.opacity = style["opacity"]
+        trace.marker.color = pop_color
+        trace.marker.symbol = style["symbol"]
+        trace.showlegend = False
+
+    # Custom legend: the automatic one no longer applies now that color
+    # isn't bound to "which group" -- build a population color key plus a
+    # group style key (line width / opacity / marker) using invisible
+    # dummy traces, so both encodings are documented on the chart itself.
+    for pop in POPULATIONS:
+        if pop in comparison_df["population"].unique():
+            fig.add_scatter(
+                x=[None], y=[None], mode="markers",
+                marker=dict(size=10, color=POP_COLORS[pop]),
+                name=pop, showlegend=True,
+            )
+    for idx, group in enumerate(groups):
+        style = group_style[idx]
+        fig.add_scatter(
+            x=[None], y=[None], mode="lines+markers",
+            line=dict(color="#6B7280", width=style["line_width"]),
+            marker=dict(symbol=style["symbol"], color="#6B7280", size=8),
+            opacity=style["opacity"],
+            name=group, showlegend=True,
+        )
+
+    # Share one y-axis scale across every population facet, so box
+    # heights are directly comparable at a glance. Gridlines still render
+    # on every facet (for visual alignment), but only the leftmost facet
+    # shows the numeric tick labels -- repeating identical labels on
+    # every facet once the scale is shared is redundant.
+    fig.update_yaxes(matches="y")
+    for axis_name in fig.layout:
+        if axis_name.startswith("yaxis") and axis_name != "yaxis":
+            fig.layout[axis_name].showticklabels = False
+    fig.layout.yaxis.showticklabels = True
+
+    fig.update_layout(legend_title_text="")
     for pop in POPULATIONS:
         p_rows = stats_df.loc[stats_df["population"] == pop, "p_value"]
         if p_rows.empty or pd.isna(p_rows.values[0]):
@@ -307,12 +367,11 @@ def render_cohort_comparison_messages(status: str, results: pd.DataFrame | None,
 
 def render_cohort_comparison_boxplot(df_a: pd.DataFrame, df_b: pd.DataFrame, label_a: str, label_b: str, stats_df: pd.DataFrame):
     """Boxplot for two arbitrary cohorts, faceted by population, colored by
-    which cohort each row came from."""
+    population (see render_boxplot); Cohort A/B differentiated by style."""
     a = df_a.copy(); a["cohort"] = label_a
     b = df_b.copy(); b["cohort"] = label_b
     combined = pd.concat([a, b], ignore_index=True)
-    color_map = {label_a: COHORT_COLOR_SEQUENCE[0], label_b: COHORT_COLOR_SEQUENCE[1]}
-    return render_boxplot(combined, stats_df, x_col="cohort", color_map=color_map)
+    return render_boxplot(combined, stats_df, x_col="cohort", group_order=[label_a, label_b])
 
 
 def age_range_widgets(age_lo: int, age_hi: int, key_prefix: str) -> tuple[int, int] | None:
@@ -596,11 +655,36 @@ with tab_explorer:
         st.write("")
         with st.container(border=True):
             st.write("**Responder vs non-responder comparison for this cohort**")
+            st.caption(
+                "Exploratory result: this test ran against whatever cohort you "
+                "built above, not a pre-specified comparison. This tool lets you "
+                "filter and re-test in effectively unlimited ways; p-values from "
+                "ad hoc slices carry less evidentiary weight than a single "
+                "pre-registered comparison (like the fixed miraclib+PBMC "
+                "comparison documented in the README) and shouldn't be read as "
+                "confirmatory on their own."
+            )
             status, results = run_stats_test_safe(filtered)
             render_stats_messages(status, results)
 
             if status == "ok":
-                fig = render_boxplot(filtered, results, color_map=RESPONSE_COLORS)
+                with st.expander("Confounder check: is response balanced across project / sex?", expanded=False):
+                    st.caption(
+                        "A high p-value here means no evidence of imbalance was "
+                        "found, not that confounding is proven absent -- this is a "
+                        "simple heuristic (p > 0.05), not a formal equivalence test."
+                    )
+                    for stratify_col, label in [("project", "Project"), ("sex", "Sex")]:
+                        balance = check_group_balance(filtered, group_col="response", stratify_col=stratify_col)
+                        if balance["p_value"] is None:
+                            st.write(f"**{label}**: only one level present in this cohort, check doesn't apply.")
+                        else:
+                            icon = "\u2705" if balance["balanced"] else "\u26a0\ufe0f"
+                            verdict = "no evidence of imbalance" if balance["balanced"] else "possible imbalance, interpret with extra caution"
+                            st.write(f"{icon} **{label}**: p={balance['p_value']:.4f} ({verdict})")
+                            st.dataframe(balance["contingency_table"], width='stretch')
+
+                fig = render_boxplot(filtered, results, group_order=["Responder", "Non-responder"])
                 st.plotly_chart(fig, width='stretch', key="explorer_tab_boxplot", config=PLOTLY_CONFIG)
                 display_results = results.drop(columns=["status", "small_n_warning"]).copy()
                 display_results["p_value"] = display_results["p_value"].apply(format_pvalue)
@@ -681,6 +765,13 @@ with tab_compare:
         st.write("")
         with st.container(border=True):
             st.write("**Mann-Whitney U results** (Bonferroni-corrected across populations tested)")
+            st.caption(
+                "Exploratory result: these two cohorts were built from whatever "
+                "filters you chose above, not a pre-specified comparison. "
+                "p-values from ad hoc slices carry less evidentiary weight than "
+                "a single pre-registered comparison and shouldn't be read as "
+                "confirmatory on their own."
+            )
             display_cmp = results.drop(columns=["status", "small_n_warning"]).copy()
             if "p_value" in display_cmp.columns:
                 display_cmp["p_value"] = display_cmp["p_value"].apply(format_pvalue)
