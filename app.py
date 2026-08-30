@@ -177,30 +177,19 @@ def cached_full_dataset(_mtime: float) -> pd.DataFrame:
 
 # ---------- shared rendering helpers ----------
 
-def blend_hex(base_hex: str, target_hex: str, weight: float) -> str:
-    """Blends base_hex toward target_hex by `weight` (0 = pure base,
-    1 = pure target). Used to give each group (e.g. Cohort A vs B) a mild
-    tint of its own signature color on top of the population's base color,
-    rather than a full hue swap."""
+def darken_hex(hex_color: str, factor: float = 0.35) -> str:
+    """Returns a darker shade of hex_color (multiplies each RGB channel
+    toward 0 by `factor`). Used for box outlines/median lines: Plotly's
+    Box trace has exactly one `line` property that controls BOTH the
+    outline and the median line (verified directly -- there's no separate
+    median styling), so setting it identical to fillcolor makes the
+    median line invisible against the fill. A darker shade keeps both
+    visible without introducing a third color."""
     def to_rgb(h):
         h = h.lstrip("#")
         return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
-    br, bg, bb = to_rgb(base_hex)
-    tr, tg, tb = to_rgb(target_hex)
-    r = round(br + (tr - br) * weight)
-    g = round(bg + (tg - bg) * weight)
-    b = round(bb + (tb - bb) * weight)
-    return f"#{max(0, min(255, r)):02X}{max(0, min(255, g)):02X}{max(0, min(255, b)):02X}"
-
-
-# How strongly each group's tint pulls the population color toward that
-# group's signature color. Chosen empirically (see project history): 0.25
-# keeps the tinted color close enough to the pure population color to
-# still read as "that population" (~53 RGB units away, worst case across
-# all 5 populations), while the two groups' tints land ~51 units apart
-# from each other -- distinct side by side without overpowering the
-# population color coordination.
-GROUP_TINT_WEIGHT = 0.25
+    r, g, b = to_rgb(hex_color)
+    return f"#{round(r * (1 - factor)):02X}{round(g * (1 - factor)):02X}{round(b * (1 - factor)):02X}"
 
 
 def render_boxplot(
@@ -208,23 +197,24 @@ def render_boxplot(
     stats_df: pd.DataFrame,
     x_col: str = "response_label",
     group_order: list[str] | None = None,
-    group_tint_colors: list[str] | None = None,
+    group_colors: list[str] | None = None,
 ):
-    """Boxplot faceted by population. Each box's base color is its
-    population's color (POP_COLORS, consistent everywhere else in the
-    dashboard, with a legend key here) -- but mildly tinted toward
-    whichever group it belongs to (group_tint_colors[0]/[1], e.g.
-    Responder's or Cohort A's signature color), so the two groups are
-    visibly distinct without losing the population color coordination.
-    Outlier-point marker shape (circle vs diamond) is a second,
-    color-independent differentiator, and an explicit text label with
-    each group's actual name is drawn above every box pair so the
-    grouping is never ambiguous even before color is considered. Plotly's
-    Box trace doesn't support dashed outlines or hatched fills (verified
-    directly against the installed Plotly version).
+    """Boxplot faceted by population. Box fill is each group's own
+    signature color (e.g. Responder/Non-responder or Cohort A/B) --
+    exactly matching the legend swatch, so there's no mismatch between
+    what the legend shows and what's actually drawn. Population isn't
+    separately color-coded here: the facet title already says which
+    population you're looking at unambiguously, so spending the fill
+    color on population would be redundant with that title. Box outlines
+    (and median lines -- Plotly's Box trace shares one `line` property
+    for both) use a darker shade of the same group color, for visible
+    contrast against the fill. An explicit text label with each group's
+    actual name is drawn above every box pair, positioned in the padding
+    added above the data range so it never overlaps the boxes/whiskers
+    themselves.
     """
     groups = group_order or sorted(comparison_df[x_col].dropna().unique())[:2]
-    tints = group_tint_colors or [None, None]
+    colors = group_colors or ["#6B7280", "#9CA3AF"]
 
     fig = px.box(
         comparison_df, x=x_col, y="percentage", facet_col="population",
@@ -237,36 +227,23 @@ def render_boxplot(
     # Traces are ordered facet-major, 2 per facet (one per group), in the
     # order given by category_orders -- verified empirically against this
     # Plotly version.
-    marker_symbols = ["circle", "diamond"]
     present_populations = [p for p in POPULATIONS if p in comparison_df["population"].unique()]
     for i, trace in enumerate(fig.data):
-        pop = present_populations[i // 2]
-        pop_color = POP_COLORS[pop]
         group_idx = 0 if trace.name == groups[0] else 1
-        tint_target = tints[group_idx]
-        fill = blend_hex(pop_color, tint_target, GROUP_TINT_WEIGHT) if tint_target else pop_color
+        fill = colors[group_idx]
+        outline = darken_hex(fill)
         trace.fillcolor = fill
-        trace.line.color = fill
-        trace.marker.color = fill
-        trace.marker.symbol = marker_symbols[group_idx]
+        trace.line.color = outline
+        trace.marker.color = outline
         trace.showlegend = False
 
-    # Custom legend: population color key (pure colors, matching every
-    # other table/chart in the dashboard) plus a group key using each
-    # group's actual signature color (not the tinted/blended version --
-    # the pure signature color is what the tint is derived from, and
-    # reads more clearly as a legend swatch).
-    for pop in present_populations:
-        fig.add_scatter(
-            x=[None], y=[None], mode="markers",
-            marker=dict(size=10, color=POP_COLORS[pop]),
-            name=pop, showlegend=True,
-        )
+    # Legend: just the 2 group swatches, in the exact colors drawn above --
+    # no population swatches here, since population is only ever conveyed
+    # by the facet titles in this chart, not by any color in it.
     for idx, group in enumerate(groups):
-        swatch_color = tints[idx] or "#6B7280"
         fig.add_scatter(
             x=[None], y=[None], mode="markers",
-            marker=dict(size=10, color=swatch_color, symbol=marker_symbols[idx]),
+            marker=dict(size=10, color=colors[idx]),
             name=group, showlegend=True,
         )
 
@@ -275,7 +252,17 @@ def render_boxplot(
     # on every facet (for visual alignment), but only the leftmost facet
     # shows the numeric tick labels -- repeating identical labels on
     # every facet once the scale is shared is redundant.
-    fig.update_yaxes(matches="y")
+    #
+    # The range is set explicitly (not left to autorange) with headroom
+    # above the actual data max, so the group-name text labels added
+    # below have dedicated empty space to sit in rather than overlapping
+    # the topmost whiskers/outlier points.
+    data_max = comparison_df["percentage"].max()
+    data_min = comparison_df["percentage"].min()
+    top_padding = (data_max - data_min) * 0.18
+    y_range = [max(0, data_min - (data_max - data_min) * 0.05), data_max + top_padding]
+
+    fig.update_yaxes(matches="y", range=y_range)
     for axis_name in fig.layout:
         if axis_name.startswith("yaxis") and axis_name != "yaxis":
             fig.layout[axis_name].showticklabels = False
@@ -283,19 +270,19 @@ def render_boxplot(
 
     fig.update_layout(legend_title_text="")
 
-    # Explicit text label with each group's actual name, drawn above every
-    # box pair -- removes any remaining ambiguity about which box is which
-    # group regardless of how the color tint reads to a given viewer.
+    # Explicit text label with each group's actual name, positioned in the
+    # headroom reserved above via y_range, well clear of the plotted data.
+    label_y = data_max + top_padding * 0.4
     for i, pop in enumerate(present_populations):
         xaxis_suffix = "" if i == 0 else str(i + 1)
-        yaxis_ref = f"y{xaxis_suffix} domain"
+        yaxis_ref = f"y{xaxis_suffix}"
         for idx, group in enumerate(groups):
             fig.add_annotation(
-                x=group, y=0.98,
+                x=group, y=label_y,
                 xref=f"x{xaxis_suffix}", yref=yaxis_ref,
                 text=group, showarrow=False,
-                font=dict(size=10, color=tints[idx] or "#6B7280"),
-                yanchor="top",
+                font=dict(size=10, color=colors[idx]),
+                yanchor="bottom",
             )
 
     for pop in present_populations:
@@ -415,7 +402,7 @@ def render_cohort_comparison_boxplot(df_a: pd.DataFrame, df_b: pd.DataFrame, lab
     combined = pd.concat([a, b], ignore_index=True)
     return render_boxplot(
         combined, stats_df, x_col="cohort", group_order=[label_a, label_b],
-        group_tint_colors=COHORT_COLOR_SEQUENCE,
+        group_colors=COHORT_COLOR_SEQUENCE,
     )
 
 
@@ -731,7 +718,7 @@ with tab_explorer:
 
                 fig = render_boxplot(
                     filtered, results, group_order=["Responder", "Non-responder"],
-                    group_tint_colors=[RESPONSE_COLORS["Responder"], RESPONSE_COLORS["Non-responder"]],
+                    group_colors=[RESPONSE_COLORS["Responder"], RESPONSE_COLORS["Non-responder"]],
                 )
                 st.plotly_chart(fig, width='stretch', key="explorer_tab_boxplot", config=PLOTLY_CONFIG)
                 display_results = results.drop(columns=["status", "small_n_warning"]).copy()
