@@ -23,6 +23,17 @@ POPULATIONS = ["b_cell", "cd8_t_cell", "cd4_t_cell", "nk_cell", "monocyte"]
 SMALL_N_THRESHOLD = 20
 
 
+def format_pvalue(p) -> str:
+    """Formats a p-value for display: avoids showing a bare '0' for a
+    genuinely tiny (but nonzero) p-value, which would misleadingly imply
+    an exact zero rather than 'too small to show at this precision'."""
+    if pd.isna(p):
+        return ""
+    if p < 0.00001:
+        return "<0.00001"
+    return f"{p:.5f}"
+
+
 # ---------- Part 2: relative frequency table ----------
 
 def get_frequency_table(conn: sqlite3.Connection) -> pd.DataFrame:
