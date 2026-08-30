@@ -1,0 +1,18 @@
+Part 4: Melanoma PBMC baseline (time=0), miraclib-treated
+============================================================
+Total samples: 656
+
+Samples per project:
+project  n_samples
+   prj1        384
+   prj3        272
+
+Subjects by response:
+response  n_subjects
+     yes         331
+      no         325
+
+Subjects by sex:
+sex  n_subjects
+  M         344
+  F         312
