@@ -67,9 +67,68 @@ h1, h2, h3 {
 section[data-testid="stSidebar"] {
     border-right: 1px solid #E3E8EA;
 }
+
+.accent-bar {
+    height: 4px;
+    width: 100%;
+    background: linear-gradient(90deg, #1F6F78 0%, #4FA8A0 40%, #E0A458 100%);
+    border-radius: 2px;
+    margin: 4px 0 18px 0;
+}
+
+.filter-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+.filter-badge.active {
+    background: #E4F2F1;
+    color: #1F6F78;
+}
+.filter-badge.inactive {
+    background: #F1F2F4;
+    color: #6B7280;
+}
+
+.cohort-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 6px;
+}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+
+def style_population_column(df: pd.DataFrame, column: str = "population") -> "pd.io.formats.style.Styler":
+    """Colors the given column's cells using POP_COLORS, so population
+    names read consistently with the same colors used in every chart."""
+    def _colorize(col):
+        if col.name != column:
+            return ["" for _ in col]
+        return [
+            f"background-color: {POP_COLORS.get(v, '#F1F2F4')}; color: white; font-weight: 500;"
+            for v in col
+        ]
+    return df.style.apply(_colorize)
+
+
+def download_csv_button(df: pd.DataFrame, filename: str, label: str, key: str):
+    """Small wrapper around st.download_button for a dataframe as CSV."""
+    st.download_button(
+        label, data=df.to_csv(index=False).encode("utf-8"),
+        file_name=filename, mime="text/csv", key=key,
+    )
+
+
+PLOTLY_CONFIG = {
+    "displaylogo": False,
+    "toImageButtonOptions": {"format": "png", "scale": 2},
+}
 
 
 # ---------- connection + caching ----------
@@ -310,17 +369,52 @@ def cohort_filter_widgets(full: pd.DataFrame, key_prefix: str) -> dict:
     )
 
 
+FILTER_KEY_SUFFIXES = [
+    "condition", "treatment", "sample_type", "sex", "project", "response", "time", "population",
+]
+
+
+def reset_filter_state(key_prefix: str, age_lo: int, age_hi: int):
+    """Clears every filter widget under key_prefix back to its default
+    (empty selection / full age range) by writing directly to
+    session_state, then triggers a rerun so the widgets pick up the reset
+    values on their next render."""
+    for suffix in FILTER_KEY_SUFFIXES:
+        st.session_state[f"{key_prefix}_{suffix}"] = []
+    st.session_state[f"{key_prefix}_age_range"] = (age_lo, age_hi)
+    st.session_state[f"{key_prefix}_age_min_input"] = age_lo
+    st.session_state[f"{key_prefix}_age_max_input"] = age_hi
+
+
 def filters_with_expander(full: pd.DataFrame, key_prefix: str, label: str = "Filters") -> dict:
-    """Wraps cohort_filter_widgets in a collapsible expander, and shows a
-    one-line summary of how many filters are currently active once it's
-    collapsed, so the active state is still visible without expanding it."""
+    """Wraps cohort_filter_widgets in a collapsible expander, shows a
+    colored badge summarizing how many filters are active even while
+    collapsed, and offers a one-click reset back to the full dataset."""
+    age_lo, age_hi = int(full["age"].min()), int(full["age"].max())
+
     with st.expander(label, expanded=False):
         filters = cohort_filter_widgets(full, key_prefix)
+
     active_n = sum(1 for v in filters.values() if v)
-    if active_n:
-        st.caption(f"{active_n} filter{'s' if active_n != 1 else ''} active.")
-    else:
-        st.caption("No filters applied. Showing the full dataset.")
+    badge_col, reset_col = st.columns([4, 1])
+    with badge_col:
+        if active_n:
+            st.markdown(
+                f"<span class='filter-badge active'>{active_n} filter"
+                f"{'s' if active_n != 1 else ''} active</span>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                "<span class='filter-badge inactive'>No filters. Showing the full dataset</span>",
+                unsafe_allow_html=True,
+            )
+    with reset_col:
+        if active_n:
+            st.button(
+                "Reset", key=f"{key_prefix}_reset_btn",
+                on_click=reset_filter_state, args=(key_prefix, age_lo, age_hi),
+            )
     return filters
 
 
@@ -356,6 +450,7 @@ st.sidebar.write(f"{len(POPULATIONS)} cell populations tracked")
 # ---------- header ----------
 st.title("Loblaw Bio")
 st.caption("Clinical trial cell population analysis")
+st.markdown("<div class='accent-bar'></div>", unsafe_allow_html=True)
 
 tab_explorer, tab_compare = st.tabs(["Custom Explorer", "Cohort Comparison"])
 
@@ -416,11 +511,16 @@ with tab_explorer:
                     "avg_percentage": "avg. % of total cells",
                     "n_samples": "n samples",
                 }
+                avg_display = avg_table.rename(columns=display_cols)
                 st.dataframe(
-                    avg_table.rename(columns=display_cols), width='stretch', hide_index=True,
+                    style_population_column(avg_display), width='stretch', hide_index=True,
                     column_config={
                         "avg. number of cells": st.column_config.NumberColumn(format="localized"),
                     },
+                )
+                download_csv_button(
+                    avg_table, "average_cell_counts.csv", "Download this table as CSV",
+                    key="explorer_avg_download",
                 )
                 st.write("")
                 color_col = "response_label" if split_toggle else "population"
@@ -431,12 +531,21 @@ with tab_explorer:
         with st.container(border=True):
             st.write("**Frequency table for this cohort**")
             freq_filtered = get_filtered_frequency_table(filtered)
+            # Not population-colored: this table can have thousands of rows
+            # (one per sample x population), which exceeds pandas Styler's
+            # cell-count limit and, more importantly, wouldn't be very
+            # readable as row-by-row color banding anyway. Coloring is
+            # reserved for the short, scannable summary tables instead.
             st.dataframe(
                 freq_filtered, width='stretch', height=300,
                 column_config={
                     "count": st.column_config.NumberColumn(format="localized"),
                     "total_count": st.column_config.NumberColumn(format="localized"),
                 },
+            )
+            download_csv_button(
+                freq_filtered, "frequency_table.csv", "Download this table as CSV",
+                key="explorer_freq_download",
             )
 
         st.write("")
@@ -447,11 +556,15 @@ with tab_explorer:
 
             if status == "ok":
                 fig = render_boxplot(filtered, results, color_map=RESPONSE_COLORS)
-                st.plotly_chart(fig, width='stretch', key="explorer_tab_boxplot")
+                st.plotly_chart(fig, width='stretch', key="explorer_tab_boxplot", config=PLOTLY_CONFIG)
                 display_results = results.drop(columns=["status", "small_n_warning"]).copy()
                 display_results["p_value"] = display_results["p_value"].apply(format_pvalue)
                 display_results["p_value_bonferroni"] = display_results["p_value_bonferroni"].apply(format_pvalue)
-                st.dataframe(display_results, width='stretch', hide_index=True)
+                st.dataframe(style_population_column(display_results), width='stretch', hide_index=True)
+                download_csv_button(
+                    display_results, "responder_comparison_stats.csv", "Download this table as CSV",
+                    key="explorer_stats_download",
+                )
 
 
 # ---------- Tab 2: Cohort Comparison (any two cohorts, side by side) ----------
@@ -465,11 +578,19 @@ with tab_compare:
 
     col_a, col_b = st.columns(2)
     with col_a:
-        st.markdown("#### Cohort A")
+        st.markdown(
+            f"<span class='cohort-dot' style='background:{COHORT_COLOR_SEQUENCE[0]};'></span>"
+            f"<strong>Cohort A</strong>",
+            unsafe_allow_html=True,
+        )
         label_a = st.text_input("Label for Cohort A", value="Cohort A", key="label_a")
         filters_a = filters_with_expander(full, "a", label="Filters (Cohort A)")
     with col_b:
-        st.markdown("#### Cohort B")
+        st.markdown(
+            f"<span class='cohort-dot' style='background:{COHORT_COLOR_SEQUENCE[1]};'></span>"
+            f"<strong>Cohort B</strong>",
+            unsafe_allow_html=True,
+        )
         label_b = st.text_input("Label for Cohort B", value="Cohort B", key="label_b")
         filters_b = filters_with_expander(full, "b", label="Filters (Cohort B)")
 
@@ -501,12 +622,16 @@ with tab_compare:
                 avg_b = avg_b.assign(cohort=label_b)
                 avg_combined = pd.concat([avg_a, avg_b], ignore_index=True)
                 render_avg_charts(avg_combined, "cohort", cohort_color_map, key_prefix="compare")
+                download_csv_button(
+                    avg_combined, "cohort_comparison_averages.csv", "Download this table as CSV",
+                    key="compare_avg_download",
+                )
 
         st.write("")
         with st.container(border=True):
             st.write(f"**Distribution comparison: {label_a} vs {label_b}**")
             fig_box = render_cohort_comparison_boxplot(cohort_a, cohort_b, label_a, label_b, results)
-            st.plotly_chart(fig_box, width='stretch', key="compare_boxplot")
+            st.plotly_chart(fig_box, width='stretch', key="compare_boxplot", config=PLOTLY_CONFIG)
 
         st.write("")
         with st.container(border=True):
@@ -516,4 +641,8 @@ with tab_compare:
                 display_cmp["p_value"] = display_cmp["p_value"].apply(format_pvalue)
             if "p_value_bonferroni" in display_cmp.columns:
                 display_cmp["p_value_bonferroni"] = display_cmp["p_value_bonferroni"].apply(format_pvalue)
-            st.dataframe(display_cmp, width='stretch', hide_index=True)
+            st.dataframe(style_population_column(display_cmp), width='stretch', hide_index=True)
+            download_csv_button(
+                display_cmp, "cohort_comparison_stats.csv", "Download this table as CSV",
+                key="compare_stats_download",
+            )
