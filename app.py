@@ -111,18 +111,30 @@ section[data-testid="stSidebar"] {
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
+def hex_to_rgba(hex_color: str, alpha: float) -> str:
+    """Converts a hex color to an rgba() string with the given opacity."""
+    hex_color = hex_color.lstrip("#")
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r}, {g}, {b}, {alpha})"
+
+
 def style_population_column(df: pd.DataFrame, column: str = "population") -> "pd.io.formats.style.Styler":
     """Colors the given column's cells using POP_COLORS, so population
     names read consistently with the same colors used in every chart.
-    Text is dark, not white: the population palette is intentionally soft/
-    light, and white text on these backgrounds falls well short of
-    readable contrast (verified: ~2:1 at best, vs. a 4.5:1 minimum for
-    body text). Dark text gives 9:1+ on every population color."""
+    Background is a partial-opacity tint (not a solid fill), matching the
+    softer, less saturated look used for population colors throughout the
+    dashboard. Text is dark, not white: the population palette is
+    intentionally soft/light, and white text on these backgrounds falls
+    well short of readable contrast (verified: ~2:1 at best, vs. a 4.5:1
+    minimum for body text). Dark text gives 9:1+ on every population
+    color, and stays well above that even at reduced background opacity
+    (opacity can only lighten the effective background further)."""
     def _colorize(col):
         if col.name != column:
             return ["" for _ in col]
         return [
-            f"background-color: {POP_COLORS.get(v, '#F1F2F4')}; color: #1A2733; font-weight: 600;"
+            f"background-color: {hex_to_rgba(POP_COLORS.get(v, '#F1F2F4'), 0.5)}; "
+            f"color: #1A2733; font-weight: 600;"
             for v in col
         ]
     return df.style.apply(_colorize)
@@ -195,17 +207,21 @@ def render_boxplot(
 def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, key_prefix: str):
     """Average cell count / average percentage bar charts, colored
     consistently by whatever column is being compared (population, or
-    response, or cohort). For the two-group comparisons (response, cohort)
-    bars also get a hatch pattern per group -- a second, color-independent
-    signal, since color alone shouldn't be the only way to tell groups
-    apart even with a colorblind-safe palette."""
-    use_pattern = color_col != "population"
+    response, or cohort). Response/cohort bars are solid, fully opaque
+    fills with a matching-color outline for crisp edges (no hatch pattern:
+    an earlier version used pattern_shape as a colorblind-safety measure,
+    but Plotly's default pattern assigns the *first* category an empty/
+    solid pattern and the *second* a diagonal-hatch fill, which reads as
+    "not fully filled in" rather than as a deliberate texture -- removed
+    in favor of just keeping the Okabe-Ito color choices themselves
+    colorblind-safe, which they already are). Population bars are given
+    reduced opacity, to match the softer/less saturated population color
+    palette used elsewhere in the dashboard."""
     chart_col1, chart_col2 = st.columns(2)
     with chart_col1:
         fig_count = px.bar(
             avg_table, x="population", y="avg_count", color=color_col,
             color_discrete_map=color_map, barmode="group",
-            pattern_shape=color_col if use_pattern else None,
             title="Average number of cells",
             labels={"avg_count": "avg. cell count"},
             category_orders={"population": POPULATIONS},
@@ -213,18 +229,27 @@ def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, 
         fig_count.update_yaxes(tickformat=",")
         if color_col == "population":
             fig_count.update_layout(showlegend=False)
+            fig_count.update_traces(marker_opacity=0.75)
+        else:
+            fig_count.update_traces(marker_line_width=1.5, selector=lambda t: True)
+            for trace in fig_count.data:
+                trace.marker.line.color = trace.marker.color
         st.plotly_chart(fig_count, width='stretch', key=f"{key_prefix}_avg_count_chart")
     with chart_col2:
         fig_pct = px.bar(
             avg_table, x="population", y="avg_percentage", color=color_col,
             color_discrete_map=color_map, barmode="group",
-            pattern_shape=color_col if use_pattern else None,
             title="Average relative frequency",
             labels={"avg_percentage": "avg. % of total cells"},
             category_orders={"population": POPULATIONS},
         )
         if color_col == "population":
             fig_pct.update_layout(showlegend=False)
+            fig_pct.update_traces(marker_opacity=0.75)
+        else:
+            fig_pct.update_traces(marker_line_width=1.5, selector=lambda t: True)
+            for trace in fig_pct.data:
+                trace.marker.line.color = trace.marker.color
         st.plotly_chart(fig_pct, width='stretch', key=f"{key_prefix}_avg_pct_chart")
 
 
