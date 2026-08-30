@@ -29,7 +29,8 @@ from analysis import (
     get_cohort_summary,
     get_filtered_frequency_table,
     get_population_averages,
-    compare_cohorts,
+    compare_n_groups,
+    compare_populations_paired,
 )
 from load_data import validate, DataValidationError
 
@@ -204,34 +205,92 @@ def test_stats_safe_only_tests_populations_present():
     assert list(results["population"]) == ["b_cell"]
 
 
-# ---------- compare_cohorts ----------
+# ---------- compare_n_groups ----------
 
-def test_compare_cohorts_a_empty(conn):
+def test_compare_n_groups_insufficient_groups_when_one_empty(conn):
     full = get_full_dataset(conn)
     empty = filter_dataset(full, condition=["nonexistent"])
     non_empty = filter_dataset(full, condition=["melanoma"])
-    status, results = compare_cohorts(empty, non_empty)
-    assert status == "a_empty"
+    status, results = compare_n_groups({"A": empty, "B": non_empty})
+    assert status == "insufficient_groups"
     assert results is None
 
 
-def test_compare_cohorts_both_empty(conn):
+def test_compare_n_groups_insufficient_groups_when_all_empty(conn):
     full = get_full_dataset(conn)
     empty = full.iloc[0:0]
-    status, results = compare_cohorts(empty, empty)
-    assert status == "both_empty"
+    status, results = compare_n_groups({"A": empty, "B": empty})
+    assert status == "insufficient_groups"
     assert results is None
 
 
-def test_compare_cohorts_known_values(conn):
+def test_compare_n_groups_two_groups_matches_known_values(conn):
+    """Regression check: the generalized N-group function must reproduce
+    the exact same numbers as the original 2-group-only implementation
+    did (verified earlier in development)."""
     full = get_full_dataset(conn)
     a = filter_dataset(full, condition=["melanoma"], treatment=["miraclib"], response=["yes"])
     b = filter_dataset(full, condition=["melanoma"], treatment=["miraclib"], response=["no"])
-    status, results = compare_cohorts(a, b)
+    status, results = compare_n_groups({"Responders": a, "Non-responders": b})
     assert status == "ok"
     cd4_row = results[results["population"] == "cd4_t_cell"].iloc[0]
     assert cd4_row["n_a"] == 1320
     assert cd4_row["n_b"] == 1335
+
+
+def test_compare_n_groups_three_groups_produces_all_pairs(conn):
+    """3 groups should produce every pairwise combination per population:
+    5 populations x C(3,2)=3 pairs = 15 rows."""
+    full = get_full_dataset(conn)
+    day0 = filter_dataset(full, treatment=["miraclib"], sample_type=["PBMC"], time_from_treatment_start=[0])
+    day7 = filter_dataset(full, treatment=["miraclib"], sample_type=["PBMC"], time_from_treatment_start=[7])
+    day14 = filter_dataset(full, treatment=["miraclib"], sample_type=["PBMC"], time_from_treatment_start=[14])
+    status, results = compare_n_groups({"Day 0": day0, "Day 7": day7, "Day 14": day14})
+    assert status == "ok"
+    assert len(results) == 15
+    pairs_seen = set(zip(results["group_a"], results["group_b"]))
+    assert len(pairs_seen) == 3  # exactly 3 distinct group-pairs across all 5 populations
+
+
+def test_compare_n_groups_drops_empty_group_and_compares_the_rest(conn):
+    full = get_full_dataset(conn)
+    a = filter_dataset(full, condition=["melanoma"])
+    b = filter_dataset(full, condition=["carcinoma"])
+    empty = filter_dataset(full, condition=["nonexistent"])
+    status, results = compare_n_groups({"A": a, "B": b, "C (empty)": empty})
+    assert status == "ok"
+    pairs_seen = set(zip(results["group_a"], results["group_b"]))
+    assert pairs_seen == {("A", "B")}  # the empty group never appears in any pair
+
+
+# ---------- compare_populations_paired ----------
+
+def test_compare_populations_paired_insufficient_when_fewer_than_two(conn):
+    full = get_full_dataset(conn)
+    filtered = filter_dataset(full, treatment=["miraclib"], sample_type=["PBMC"])
+    status, results = compare_populations_paired(filtered, ["b_cell"])
+    assert status == "insufficient_groups"
+    assert results is None
+
+
+def test_compare_populations_paired_uses_matched_samples(conn):
+    """Every sample has all 5 populations in this dataset, so pairing
+    should keep every sample (n_a == n_b == total sample count), and the
+    test should be genuinely paired (same sample order on both sides)."""
+    full = get_full_dataset(conn)
+    filtered = filter_dataset(full, treatment=["miraclib"], sample_type=["PBMC"])
+    status, results = compare_populations_paired(filtered, ["b_cell", "nk_cell"])
+    assert status == "ok"
+    row = results.iloc[0]
+    assert row["n_a"] == row["n_b"] == filtered["sample"].nunique()
+
+
+def test_compare_populations_paired_three_populations_all_pairs(conn):
+    full = get_full_dataset(conn)
+    filtered = filter_dataset(full, treatment=["miraclib"], sample_type=["PBMC"])
+    status, results = compare_populations_paired(filtered, ["b_cell", "cd4_t_cell", "nk_cell"])
+    assert status == "ok"
+    assert len(results) == 3  # C(3,2)
 
 
 # ---------- get_population_averages ----------
