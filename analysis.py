@@ -11,10 +11,11 @@ Design:
   - Framework-agnostic: no Streamlit here, so these are testable standalone.
 """
 import sqlite3
+import itertools
 
 import numpy as np
 import pandas as pd
-from scipy.stats import mannwhitneyu, chi2_contingency
+from scipy.stats import mannwhitneyu, chi2_contingency, wilcoxon
 
 POPULATIONS = ["b_cell", "cd8_t_cell", "cd4_t_cell", "nk_cell", "monocyte"]
 
@@ -464,77 +465,157 @@ def get_filtered_frequency_table(df: pd.DataFrame) -> pd.DataFrame:
     return df[["sample", "total_count", "population", "count", "percentage"]]
 
 
-# ---------- Cohort vs cohort comparison ----------
+# ---------- N-group comparison (2 or more independently-filtered groups) ----------
 
-def compare_cohorts(
-    df_a: pd.DataFrame,
-    df_b: pd.DataFrame,
-) -> tuple[str, pd.DataFrame | None]:
+def compare_n_groups(group_dfs: dict) -> tuple[str, pd.DataFrame | None]:
     """
-    Compares two independently-filtered cohorts (e.g. two different
-    filter_dataset() calls) per population, using the same statistical
-    approach as run_stats_test_safe (Mann-Whitney U on the CLR-transformed
-    value, Bonferroni-corrected across populations actually tested) --
-    but generalized to any two cohorts rather than being tied to the
-    responder/non-responder split. See add_clr_column for why CLR, not
-    the raw percentage.
+    Compares 2 or more independently-filtered groups (e.g. Cohort A/B/C,
+    or Day 0/Day 7/Day 14) per population, using pairwise Mann-Whitney U
+    tests on the CLR-transformed value (see add_clr_column) between every
+    pair of groups, Bonferroni-corrected across ALL pairwise tests
+    actually performed (populations x group-pairs that produced a valid
+    p-value).
+
+    This is a real statistical cost of choosing pairwise tests over a
+    single omnibus test (e.g. Kruskal-Wallis): the number of tests grows
+    quadratically with the number of groups (3 groups = 3 pairs per
+    population, 4 groups = 6 pairs per population, ...), so the
+    correction gets stricter fast as more groups are compared at once --
+    worth knowing before selecting many groups simultaneously.
+
+    group_dfs: a dict of {label: dataframe}, e.g.
+        {"Day 0": df_day0, "Day 7": df_day7, "Day 14": df_day14}
+    Groups with no matching samples are dropped before comparing; if
+    fewer than 2 non-empty groups remain, this returns
+    ("insufficient_groups", None) rather than silently comparing nothing.
 
     Returns (status, results_df):
 
-      status == "a_empty" / "b_empty" / "both_empty"
-          One or both cohorts have no matching samples. results_df is None.
+      status == "insufficient_groups"
+          Fewer than 2 of the given groups have any samples at all.
+          results_df is None.
 
       status == "ok"
-          Both cohorts have at least one sample. results_df has one row
-          per population present in either cohort. A population present in
-          only one cohort (possible if the two cohorts used different
-          population filters) gets status="no_individuals" and a null
-          p-value rather than being silently dropped, consistent with how
-          run_stats_test_safe handles the equivalent gap.
+          At least 2 groups have samples. results_df has one row per
+          (population, group_a, group_b) pair actually compared. A pair
+          where one side has zero samples for a given population gets
+          status="no_individuals" and a null p-value rather than being
+          silently dropped, consistent with run_stats_test_safe's
+          equivalent handling.
     """
-    a_empty, b_empty = df_a.empty, df_b.empty
-    if a_empty and b_empty:
-        return "both_empty", None
-    if a_empty:
-        return "a_empty", None
-    if b_empty:
-        return "b_empty", None
+    non_empty = {label: df for label, df in group_dfs.items() if not df.empty}
+    if len(non_empty) < 2:
+        return "insufficient_groups", None
+
+    labels = list(non_empty.keys())
+    pairs = list(itertools.combinations(labels, 2))
 
     populations_present = [
         p for p in POPULATIONS
-        if p in set(df_a["population"].unique()) | set(df_b["population"].unique())
+        if any(p in df["population"].unique() for df in non_empty.values())
     ]
 
     rows = []
     for pop in populations_present:
-        pop_a = df_a[df_a["population"] == pop]
-        pop_b = df_b[df_b["population"] == pop]
+        for label_a, label_b in pairs:
+            pop_a = non_empty[label_a][non_empty[label_a]["population"] == pop]
+            pop_b = non_empty[label_b][non_empty[label_b]["population"] == pop]
 
-        if len(pop_a) == 0 or len(pop_b) == 0:
+            if len(pop_a) == 0 or len(pop_b) == 0:
+                rows.append({
+                    "population": pop, "group_a": label_a, "group_b": label_b,
+                    "n_a": len(pop_a), "n_b": len(pop_b),
+                    "avg_count_a": round(pop_a["count"].mean(), 2) if len(pop_a) else None,
+                    "avg_count_b": round(pop_b["count"].mean(), 2) if len(pop_b) else None,
+                    "avg_pct_a": round(pop_a["percentage"].mean(), 3) if len(pop_a) else None,
+                    "avg_pct_b": round(pop_b["percentage"].mean(), 3) if len(pop_b) else None,
+                    "p_value": None, "status": "no_individuals", "small_n_warning": False,
+                })
+                continue
+
+            stat, p = mannwhitneyu(pop_a["clr"], pop_b["clr"], alternative="two-sided")
             rows.append({
-                "population": pop,
+                "population": pop, "group_a": label_a, "group_b": label_b,
                 "n_a": len(pop_a), "n_b": len(pop_b),
-                "avg_count_a": round(pop_a["count"].mean(), 2) if len(pop_a) else None,
-                "avg_count_b": round(pop_b["count"].mean(), 2) if len(pop_b) else None,
-                "avg_pct_a": round(pop_a["percentage"].mean(), 3) if len(pop_a) else None,
-                "avg_pct_b": round(pop_b["percentage"].mean(), 3) if len(pop_b) else None,
-                "p_value": None,
-                "status": "no_individuals",
-                "small_n_warning": False,
+                "avg_count_a": round(pop_a["count"].mean(), 2),
+                "avg_count_b": round(pop_b["count"].mean(), 2),
+                "avg_pct_a": round(pop_a["percentage"].mean(), 3),
+                "avg_pct_b": round(pop_b["percentage"].mean(), 3),
+                "p_value": p, "status": "ok",
+                "small_n_warning": len(pop_a) < SMALL_N_THRESHOLD or len(pop_b) < SMALL_N_THRESHOLD,
+            })
+
+    results = pd.DataFrame(rows)
+    valid = results["p_value"].notna()
+    results.loc[valid, "p_value_bonferroni"] = (
+        results.loc[valid, "p_value"] * valid.sum()
+    ).clip(upper=1.0)
+    results["significant_bonferroni"] = results["p_value_bonferroni"] < 0.05
+    results = results.sort_values("p_value", na_position="last").reset_index(drop=True)
+
+    return "ok", results
+
+
+def compare_populations_paired(df: pd.DataFrame, populations: list) -> tuple[str, pd.DataFrame | None]:
+    """
+    Compares 2 or more cell populations' relative frequencies directly
+    against each other, WITHIN the same cohort -- e.g. "is b_cell % higher
+    than cd4_t_cell % in this cohort?"
+
+    This is deliberately NOT the same test as compare_n_groups. Two
+    populations' percentages from the SAME sample are not independent --
+    they're both part of that one sample's composition, tied together by
+    the same closure constraint discussed in add_clr_column -- so an
+    unpaired test (Mann-Whitney) would be the wrong tool. This uses the
+    Wilcoxon signed-rank test instead: the paired, non-parametric
+    analogue of Mann-Whitney, run on each pair of populations' CLR values
+    for the SAME set of samples.
+
+    Only samples present in BOTH populations being compared are used for
+    each pairwise test (Wilcoxon requires matched pairs); a sample
+    missing one of the two populations in a given pair is dropped from
+    just that pair's test, not from the whole comparison.
+
+    Returns (status, results_df) with the same status conventions as
+    compare_n_groups, except there's no "population" column (each row
+    already IS a specific pair of populations, not a population being
+    split by group) and group_a/group_b hold population names.
+    """
+    present = [p for p in populations if p in df["population"].unique()]
+    if len(present) < 2:
+        return "insufficient_groups", None
+
+    pairs = list(itertools.combinations(present, 2))
+    rows = []
+    for pop_a, pop_b in pairs:
+        side_a = df[df["population"] == pop_a][["sample", "clr", "count", "percentage"]].rename(
+            columns={"clr": "clr_a", "count": "count_a", "percentage": "pct_a"}
+        )
+        side_b = df[df["population"] == pop_b][["sample", "clr", "count", "percentage"]].rename(
+            columns={"clr": "clr_b", "count": "count_b", "percentage": "pct_b"}
+        )
+        merged = side_a.merge(side_b, on="sample", how="inner")
+
+        if len(merged) == 0:
+            rows.append({
+                "group_a": pop_a, "group_b": pop_b,
+                "n_a": 0, "n_b": 0,
+                "avg_count_a": None, "avg_count_b": None,
+                "avg_pct_a": None, "avg_pct_b": None,
+                "p_value": None, "status": "no_individuals", "small_n_warning": False,
             })
             continue
 
-        stat, p = mannwhitneyu(pop_a["clr"], pop_b["clr"], alternative="two-sided")
+        stat, p = wilcoxon(merged["clr_a"], merged["clr_b"])
         rows.append({
-            "population": pop,
-            "n_a": len(pop_a), "n_b": len(pop_b),
-            "avg_count_a": round(pop_a["count"].mean(), 2),
-            "avg_count_b": round(pop_b["count"].mean(), 2),
-            "avg_pct_a": round(pop_a["percentage"].mean(), 3),
-            "avg_pct_b": round(pop_b["percentage"].mean(), 3),
-            "p_value": p,
-            "status": "ok",
-            "small_n_warning": len(pop_a) < SMALL_N_THRESHOLD or len(pop_b) < SMALL_N_THRESHOLD,
+            "group_a": pop_a, "group_b": pop_b,
+            "n_a": len(merged), "n_b": len(merged),
+            "avg_count_a": round(merged["count_a"].mean(), 2),
+            "avg_count_b": round(merged["count_b"].mean(), 2),
+            "avg_pct_a": round(merged["pct_a"].mean(), 3),
+            "avg_pct_b": round(merged["pct_b"].mean(), 3),
+            "p_value": p, "status": "ok",
+            "small_n_warning": len(merged) < SMALL_N_THRESHOLD,
         })
 
     results = pd.DataFrame(rows)
