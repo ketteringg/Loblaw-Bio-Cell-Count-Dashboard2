@@ -7,7 +7,7 @@ data, examining how immune cell populations relate to treatment response.
 
 ```bash
 make setup       # pip install -r requirements.txt
-make pipeline    # python load_data.py -- builds cell_counts.db from cell-count.csv
+make pipeline    # python3 -m streamlit run app.py -- builds cell_counts.db from cell-count.csv
 make dashboard   # streamlit run app.py -- launches the interactive dashboard
 ```
 
@@ -15,7 +15,7 @@ Equivalent plain commands, if you'd rather not use `make`:
 
 ```bash
 pip install -r requirements.txt
-python load_data.py
+python3 -m streamlit run app.py
 streamlit run app.py
 ```
 
