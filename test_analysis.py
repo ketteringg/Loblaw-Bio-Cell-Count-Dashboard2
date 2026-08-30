@@ -15,6 +15,8 @@ from analysis import (
     POPULATIONS,
     SMALL_N_THRESHOLD,
     format_pvalue,
+    add_clr_column,
+    check_group_balance,
     get_frequency_table,
     get_responder_comparison,
     run_stats_test,
@@ -70,7 +72,13 @@ def test_known_significant_populations_after_bonferroni(conn):
     comparison = get_responder_comparison(conn)
     results = run_stats_test(comparison)
     significant = set(results[results["significant_bonferroni"]]["population"])
-    assert significant == {"cd4_t_cell", "b_cell", "monocyte"}
+    # CLR-based (see analysis.py's add_clr_column docstring and the
+    # README): monocyte was significant under raw-percentage testing but
+    # doesn't survive the CLR transform. cd4_t_cell and b_cell are robust
+    # either way. This is the intended, verified behavior change, not a
+    # regression -- if this assertion ever needs updating again, confirm
+    # deliberately, don't just paper over a real result change.
+    assert significant == {"cd4_t_cell", "b_cell"}
 
 
 # ---------- Part 4: baseline cohort ----------
@@ -189,6 +197,7 @@ def test_stats_safe_only_tests_populations_present():
         "response": ["yes", "yes", "no", "no"],
         "percentage": [10.0, 12.0, 9.0, 11.0],
         "count": [100, 120, 90, 110],
+        "clr": [0.05, 0.09, -0.04, 0.01],  # arbitrary but valid; test doesn't check p-value content
     })
     status, results = run_stats_test_safe(df)
     assert status == "ok"
@@ -307,3 +316,114 @@ def test_validate_warns_but_does_not_fail_on_unexpected_category(capsys):
     validate(df)  # should not raise
     captured = capsys.readouterr()
     assert "WARNING" in captured.out
+
+
+# ---------- add_clr_column ----------
+
+def test_clr_sums_to_zero_per_sample(conn):
+    """CLR values for a sample's 5 populations should sum to ~0 by
+    construction (it's a log-ratio relative to the sample's own geometric
+    mean)."""
+    full = get_full_dataset(conn)
+    sums = full.groupby("sample")["clr"].sum()
+    assert sums.abs().max() < 1e-6
+
+
+def test_clr_unaffected_by_population_filter():
+    """Like the percentage invariant: narrowing to a subset of
+    populations shouldn't change an already-computed CLR value, since it
+    must be computed against the sample's full 5-population set."""
+    df = pd.DataFrame({
+        "sample": ["s1", "s1", "s1"],
+        "population": ["b_cell", "cd8_t_cell", "cd4_t_cell"],
+        "count": [100, 200, 300],
+    })
+    full_clr = add_clr_column(df)
+    b_cell_clr_full = full_clr[full_clr["population"] == "b_cell"]["clr"].iloc[0]
+
+    filtered = df[df["population"].isin(["b_cell", "cd8_t_cell"])]
+    # Adding clr to the already-narrowed df would be wrong (2-population
+    # geometric mean instead of 3) -- this test documents why clr must be
+    # computed on the full set upstream, matching how get_full_dataset
+    # calls add_clr_column before any filter_dataset() call ever runs.
+    narrow_clr = add_clr_column(filtered)
+    b_cell_clr_narrow = narrow_clr[narrow_clr["population"] == "b_cell"]["clr"].iloc[0]
+    assert b_cell_clr_full != pytest.approx(b_cell_clr_narrow)
+
+
+def test_clr_handles_zero_count_without_raising():
+    """A zero count would make log(0) undefined -- confirm this doesn't
+    raise, and that sample's clr values come back as NaN rather than
+    silently wrong numbers."""
+    df = pd.DataFrame({
+        "sample": ["s1", "s1", "s2", "s2"],
+        "population": ["b_cell", "cd8_t_cell", "b_cell", "cd8_t_cell"],
+        "count": [0, 100, 50, 150],
+    })
+    result = add_clr_column(df)
+    assert result[result["sample"] == "s1"]["clr"].isna().all()
+    assert result[result["sample"] == "s2"]["clr"].notna().all()
+
+
+def test_clr_based_test_changes_the_conclusion(conn):
+    """The whole point of switching to CLR: confirms monocyte, which is
+    significant under raw percentages, does not survive the CLR-based
+    test -- this is the empirical finding documented in the README, not
+    an assumption."""
+    comparison = get_responder_comparison(conn)
+    results = run_stats_test(comparison)
+    significant = set(results[results["significant_bonferroni"]]["population"])
+    assert "monocyte" not in significant
+    assert {"cd4_t_cell", "b_cell"}.issubset(significant)
+
+
+# ---------- check_group_balance ----------
+
+def test_group_balance_detects_real_imbalance():
+    """Construct a dataframe with an obvious, deliberate imbalance and
+    confirm the function actually flags it -- tests the mechanism
+    generally, not tied to any specific real dataset's values."""
+    df = pd.DataFrame({
+        "subject_id": [f"s{i}" for i in range(40)],
+        "response": ["yes"] * 18 + ["no"] * 2 + ["yes"] * 2 + ["no"] * 18,
+        "project": ["prj1"] * 20 + ["prj2"] * 20,
+    })
+    result = check_group_balance(df, group_col="response", stratify_col="project")
+    assert result["p_value"] is not None
+    assert result["p_value"] < 0.05
+    assert bool(result["balanced"]) is False
+
+
+def test_group_balance_detects_real_balance():
+    """A deliberately balanced synthetic dataset should not be flagged."""
+    df = pd.DataFrame({
+        "subject_id": [f"s{i}" for i in range(40)],
+        "response": (["yes"] * 10 + ["no"] * 10) * 2,
+        "project": ["prj1"] * 20 + ["prj2"] * 20,
+    })
+    result = check_group_balance(df, group_col="response", stratify_col="project")
+    assert result["p_value"] is not None
+    assert bool(result["balanced"]) is True
+
+
+def test_group_balance_handles_single_level_stratify_col():
+    """If the stratifying column only has one level present (e.g. a
+    filtered cohort that happens to only include one project), the chi-
+    square test doesn't apply -- should return None, not raise."""
+    df = pd.DataFrame({
+        "subject_id": ["s1", "s2", "s3"],
+        "response": ["yes", "no", "yes"],
+        "project": ["prj1", "prj1", "prj1"],
+    })
+    result = check_group_balance(df, group_col="response", stratify_col="project")
+    assert result["p_value"] is None
+    assert result["balanced"] is None
+
+
+def test_group_balance_on_real_data_project(conn):
+    """Cross-check against the manual finding from earlier development:
+    response is balanced across project in the real Part 3 cohort."""
+    full = get_full_dataset(conn)
+    cohort = filter_dataset(full, treatment=["miraclib"], sample_type=["PBMC"])
+    result = check_group_balance(cohort, group_col="response", stratify_col="project")
+    assert bool(result["balanced"]) is True
