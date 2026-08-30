@@ -177,23 +177,54 @@ def cached_full_dataset(_mtime: float) -> pd.DataFrame:
 
 # ---------- shared rendering helpers ----------
 
+def blend_hex(base_hex: str, target_hex: str, weight: float) -> str:
+    """Blends base_hex toward target_hex by `weight` (0 = pure base,
+    1 = pure target). Used to give each group (e.g. Cohort A vs B) a mild
+    tint of its own signature color on top of the population's base color,
+    rather than a full hue swap."""
+    def to_rgb(h):
+        h = h.lstrip("#")
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    br, bg, bb = to_rgb(base_hex)
+    tr, tg, tb = to_rgb(target_hex)
+    r = round(br + (tr - br) * weight)
+    g = round(bg + (tg - bg) * weight)
+    b = round(bb + (tb - bb) * weight)
+    return f"#{max(0, min(255, r)):02X}{max(0, min(255, g)):02X}{max(0, min(255, b)):02X}"
+
+
+# How strongly each group's tint pulls the population color toward that
+# group's signature color. Chosen empirically (see project history): 0.25
+# keeps the tinted color close enough to the pure population color to
+# still read as "that population" (~53 RGB units away, worst case across
+# all 5 populations), while the two groups' tints land ~51 units apart
+# from each other -- distinct side by side without overpowering the
+# population color coordination.
+GROUP_TINT_WEIGHT = 0.25
+
+
 def render_boxplot(
     comparison_df: pd.DataFrame,
     stats_df: pd.DataFrame,
     x_col: str = "response_label",
     group_order: list[str] | None = None,
+    group_tint_colors: list[str] | None = None,
 ):
-    """Boxplot faceted by population. Color encodes cell population
-    (consistent with POP_COLORS used throughout the dashboard, with a
-    legend key here). The two x_col groups (e.g. Responder/Non-responder,
-    or Cohort A/Cohort B) are deliberately NOT color-coded, since color is
-    already reserved for population -- they're differentiated instead by
-    box outline width, opacity, and outlier-point marker shape. Plotly's
+    """Boxplot faceted by population. Each box's base color is its
+    population's color (POP_COLORS, consistent everywhere else in the
+    dashboard, with a legend key here) -- but mildly tinted toward
+    whichever group it belongs to (group_tint_colors[0]/[1], e.g.
+    Responder's or Cohort A's signature color), so the two groups are
+    visibly distinct without losing the population color coordination.
+    Outlier-point marker shape (circle vs diamond) is a second,
+    color-independent differentiator, and an explicit text label with
+    each group's actual name is drawn above every box pair so the
+    grouping is never ambiguous even before color is considered. Plotly's
     Box trace doesn't support dashed outlines or hatched fills (verified
-    directly against the installed Plotly version), so these are the real
-    available differentiators, not a fallback of convenience.
+    directly against the installed Plotly version).
     """
     groups = group_order or sorted(comparison_df[x_col].dropna().unique())[:2]
+    tints = group_tint_colors or [None, None]
 
     fig = px.box(
         comparison_df, x=x_col, y="percentage", facet_col="population",
@@ -205,42 +236,37 @@ def render_boxplot(
 
     # Traces are ordered facet-major, 2 per facet (one per group), in the
     # order given by category_orders -- verified empirically against this
-    # Plotly version. group_style[0] applies to groups[0] (e.g.
-    # Responder / Cohort A), group_style[1] to groups[1].
-    group_style = [
-        dict(line_width=1.5, opacity=1.0, symbol="circle"),
-        dict(line_width=3.5, opacity=0.55, symbol="diamond"),
-    ]
+    # Plotly version.
+    marker_symbols = ["circle", "diamond"]
+    present_populations = [p for p in POPULATIONS if p in comparison_df["population"].unique()]
     for i, trace in enumerate(fig.data):
-        pop = POPULATIONS[i // 2]
+        pop = present_populations[i // 2]
         pop_color = POP_COLORS[pop]
-        style = group_style[0] if trace.name == groups[0] else group_style[1]
-        trace.fillcolor = pop_color
-        trace.line.color = pop_color
-        trace.line.width = style["line_width"]
-        trace.opacity = style["opacity"]
-        trace.marker.color = pop_color
-        trace.marker.symbol = style["symbol"]
+        group_idx = 0 if trace.name == groups[0] else 1
+        tint_target = tints[group_idx]
+        fill = blend_hex(pop_color, tint_target, GROUP_TINT_WEIGHT) if tint_target else pop_color
+        trace.fillcolor = fill
+        trace.line.color = fill
+        trace.marker.color = fill
+        trace.marker.symbol = marker_symbols[group_idx]
         trace.showlegend = False
 
-    # Custom legend: the automatic one no longer applies now that color
-    # isn't bound to "which group" -- build a population color key plus a
-    # group style key (line width / opacity / marker) using invisible
-    # dummy traces, so both encodings are documented on the chart itself.
-    for pop in POPULATIONS:
-        if pop in comparison_df["population"].unique():
-            fig.add_scatter(
-                x=[None], y=[None], mode="markers",
-                marker=dict(size=10, color=POP_COLORS[pop]),
-                name=pop, showlegend=True,
-            )
-    for idx, group in enumerate(groups):
-        style = group_style[idx]
+    # Custom legend: population color key (pure colors, matching every
+    # other table/chart in the dashboard) plus a group key using each
+    # group's actual signature color (not the tinted/blended version --
+    # the pure signature color is what the tint is derived from, and
+    # reads more clearly as a legend swatch).
+    for pop in present_populations:
         fig.add_scatter(
-            x=[None], y=[None], mode="lines+markers",
-            line=dict(color="#6B7280", width=style["line_width"]),
-            marker=dict(symbol=style["symbol"], color="#6B7280", size=8),
-            opacity=style["opacity"],
+            x=[None], y=[None], mode="markers",
+            marker=dict(size=10, color=POP_COLORS[pop]),
+            name=pop, showlegend=True,
+        )
+    for idx, group in enumerate(groups):
+        swatch_color = tints[idx] or "#6B7280"
+        fig.add_scatter(
+            x=[None], y=[None], mode="markers",
+            marker=dict(size=10, color=swatch_color, symbol=marker_symbols[idx]),
             name=group, showlegend=True,
         )
 
@@ -256,7 +282,23 @@ def render_boxplot(
     fig.layout.yaxis.showticklabels = True
 
     fig.update_layout(legend_title_text="")
-    for pop in POPULATIONS:
+
+    # Explicit text label with each group's actual name, drawn above every
+    # box pair -- removes any remaining ambiguity about which box is which
+    # group regardless of how the color tint reads to a given viewer.
+    for i, pop in enumerate(present_populations):
+        xaxis_suffix = "" if i == 0 else str(i + 1)
+        yaxis_ref = f"y{xaxis_suffix} domain"
+        for idx, group in enumerate(groups):
+            fig.add_annotation(
+                x=group, y=0.98,
+                xref=f"x{xaxis_suffix}", yref=yaxis_ref,
+                text=group, showarrow=False,
+                font=dict(size=10, color=tints[idx] or "#6B7280"),
+                yanchor="top",
+            )
+
+    for pop in present_populations:
         p_rows = stats_df.loc[stats_df["population"] == pop, "p_value"]
         if p_rows.empty or pd.isna(p_rows.values[0]):
             continue
@@ -367,11 +409,14 @@ def render_cohort_comparison_messages(status: str, results: pd.DataFrame | None,
 
 def render_cohort_comparison_boxplot(df_a: pd.DataFrame, df_b: pd.DataFrame, label_a: str, label_b: str, stats_df: pd.DataFrame):
     """Boxplot for two arbitrary cohorts, faceted by population, colored by
-    population (see render_boxplot); Cohort A/B differentiated by style."""
+    population and mildly tinted per cohort (see render_boxplot)."""
     a = df_a.copy(); a["cohort"] = label_a
     b = df_b.copy(); b["cohort"] = label_b
     combined = pd.concat([a, b], ignore_index=True)
-    return render_boxplot(combined, stats_df, x_col="cohort", group_order=[label_a, label_b])
+    return render_boxplot(
+        combined, stats_df, x_col="cohort", group_order=[label_a, label_b],
+        group_tint_colors=COHORT_COLOR_SEQUENCE,
+    )
 
 
 def age_range_widgets(age_lo: int, age_hi: int, key_prefix: str) -> tuple[int, int] | None:
@@ -684,7 +729,10 @@ with tab_explorer:
                             st.write(f"{icon} **{label}**: p={balance['p_value']:.4f} ({verdict})")
                             st.dataframe(balance["contingency_table"], width='stretch')
 
-                fig = render_boxplot(filtered, results, group_order=["Responder", "Non-responder"])
+                fig = render_boxplot(
+                    filtered, results, group_order=["Responder", "Non-responder"],
+                    group_tint_colors=[RESPONSE_COLORS["Responder"], RESPONSE_COLORS["Non-responder"]],
+                )
                 st.plotly_chart(fig, width='stretch', key="explorer_tab_boxplot", config=PLOTLY_CONFIG)
                 display_results = results.drop(columns=["status", "small_n_warning"]).copy()
                 display_results["p_value"] = display_results["p_value"].apply(format_pvalue)
