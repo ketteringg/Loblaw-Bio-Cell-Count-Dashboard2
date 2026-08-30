@@ -190,7 +190,11 @@ def render_boxplot(
         labels={"percentage": "% of total cells", x_col: ""},
         color=x_col, color_discrete_map=color_map,
     )
-    fig.update_yaxes(matches=None, showticklabels=True)
+    # Share one y-axis scale across every population facet, so bar/box
+    # heights are directly comparable at a glance (a population with a
+    # 40% avg looks visibly larger than one with a 5% avg, rather than
+    # each facet being independently rescaled to fill its own panel).
+    fig.update_yaxes(matches="y", showticklabels=True)
     fig.update_layout(showlegend=True, legend_title_text="")
     for pop in POPULATIONS:
         p_rows = stats_df.loc[stats_df["population"] == pop, "p_value"]
