@@ -12,8 +12,9 @@ Design:
 """
 import sqlite3
 
+import numpy as np
 import pandas as pd
-from scipy.stats import mannwhitneyu
+from scipy.stats import mannwhitneyu, chi2_contingency
 
 POPULATIONS = ["b_cell", "cd8_t_cell", "cd4_t_cell", "nk_cell", "monocyte"]
 
@@ -32,6 +33,88 @@ def format_pvalue(p) -> str:
     if p < 0.00001:
         return "<0.00001"
     return f"{p:.5f}"
+
+
+def add_clr_column(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adds a `clr` column: the centered log-ratio transform of each row's
+    count, computed per sample across that sample's full 5-population set.
+
+    Why: the 5 cell populations are compositional data -- they sum to
+    100% of each sample's total cell count, so an increase in one
+    population mechanically forces the others down. That "closure"
+    constraint means the 5 populations are not independent, and running a
+    standard test directly on raw percentages (or raw counts) treats them
+    as if they were, which can manufacture or mask apparent significance.
+    CLR removes the constraint by moving from percentages to log-ratios
+    relative to each sample's own geometric mean across populations,
+    putting the data in ordinary (unconstrained) real space where
+    standard statistics are valid. clr_i = ln(count_i) - mean(ln(counts))
+    for that sample.
+
+    Caveat, stated plainly: CLR is not a complete fix. The D=5
+    CLR-transformed values for a sample still sum to exactly zero by
+    construction, so one linear dependency remains among them (unlike
+    ILR, which uses D-1 orthonormal coordinates and removes the
+    constraint entirely). CLR was chosen over ILR here because CLR keeps
+    one interpretable value per population -- matching what the
+    assignment and Bob actually need ("which populations differ") --
+    whereas ILR's coordinates are linear combinations across multiple
+    populations at once and don't map back to a single population
+    cleanly. See README for the empirical comparison against testing
+    directly on raw percentages.
+
+    Requires every population's count to be > 0 for a given sample (true
+    throughout this dataset -- verified, minimum count is 1835, nowhere
+    near zero). If a future dataset has a zero count, log(0) is
+    undefined; rows for that sample get `clr = NaN` rather than raising,
+    so callers relying on `clr` should be aware a sample could silently
+    drop out of a CLR-based test if this prerequisite is ever violated.
+    """
+    out = df.copy()
+    has_zero = out.groupby("sample")["count"].transform(lambda x: (x <= 0).any())
+    valid = ~has_zero
+    out["clr"] = np.nan
+    ln_count = np.log(out.loc[valid, "count"])
+    geo_mean_ln = out.loc[valid].groupby("sample")["count"].transform(lambda x: np.log(x).mean())
+    out.loc[valid, "clr"] = ln_count - geo_mean_ln
+    return out
+
+
+def check_group_balance(df: pd.DataFrame, group_col: str, stratify_col: str) -> dict:
+    """
+    Checks whether `group_col` (e.g. response) is balanced across levels
+    of `stratify_col` (e.g. project), via a chi-square test of
+    independence on a per-subject contingency table.
+
+    General-purpose by design: works on any dataframe shaped like
+    get_full_dataset()'s output, for any pair of categorical columns --
+    not hardcoded to this CSV's specific projects or response values. If
+    a future version of the data has different projects, more of them,
+    or an actual imbalance, this recomputes against whatever is loaded
+    and reflects that, rather than reporting a stale historical finding
+    about the current dataset. This is what makes a confounder check
+    "valid for other datasets": the check is code, not a documented fact.
+
+    Returns a dict with:
+      contingency_table -- the raw counts (subject-level, deduplicated)
+      p_value -- from the chi-square test, or None if either variable
+                 has fewer than 2 observed levels (test doesn't apply)
+      balanced -- p_value > 0.05, a simple heuristic threshold, NOT a
+                 formal equivalence test. A high p-value here means "no
+                 evidence of imbalance was found," not "confounding is
+                 proven absent" -- absence of evidence isn't evidence of
+                 absence, especially at small sample sizes.
+    """
+    subj = df.drop_duplicates("subject_id")
+    subj = subj[subj[group_col].notna() & subj[stratify_col].notna()]
+
+    ct = pd.crosstab(subj[stratify_col], subj[group_col])
+    if ct.shape[0] < 2 or ct.shape[1] < 2:
+        return {"contingency_table": ct, "p_value": None, "balanced": None}
+
+    chi2, p, dof, expected = chi2_contingency(ct)
+    return {"contingency_table": ct, "p_value": p, "balanced": p > 0.05}
 
 
 # ---------- Part 2: relative frequency table ----------
@@ -74,6 +157,7 @@ def get_responder_comparison(conn: sqlite3.Connection) -> pd.DataFrame:
     df["total_count"] = df.groupby("sample")["count"].transform("sum")
     df["percentage"] = df["count"] / df["total_count"] * 100
     df["response_label"] = df["response"].map({"yes": "Responder", "no": "Non-responder"})
+    df = add_clr_column(df)
 
     return df
 
@@ -81,9 +165,17 @@ def get_responder_comparison(conn: sqlite3.Connection) -> pd.DataFrame:
 def run_stats_test(comparison_df: pd.DataFrame) -> pd.DataFrame:
     """
     Mann-Whitney U test per population, responders vs non-responders.
-    Non-parametric: doesn't assume normality, appropriate for bounded
-    percentage data. Includes Bonferroni-corrected p-value across the
-    5 populations tested.
+
+    The test itself runs on the CLR-transformed value (see
+    add_clr_column), not the raw percentage: the 5 populations are
+    compositional data (percentages that sum to 100% per sample aren't
+    independent), and testing directly on percentages can manufacture or
+    mask apparent significance as a result. Reported medians below are
+    still percentages, since that's the natural, interpretable unit for
+    describing composition -- only the significance test itself uses CLR.
+    See README for the empirical comparison: testing on raw percentages
+    instead reports monocyte as significant too; it doesn't survive the
+    CLR-based test.
 
     Takes the already-fetched comparison DataFrame (pure computation,
     no DB access) so it stays independently testable.
@@ -91,15 +183,15 @@ def run_stats_test(comparison_df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for pop in POPULATIONS:
         pop_df = comparison_df[comparison_df["population"] == pop]
-        yes = pop_df[pop_df["response"] == "yes"]["percentage"]
-        no = pop_df[pop_df["response"] == "no"]["percentage"]
-        stat, p = mannwhitneyu(yes, no, alternative="two-sided")
+        yes = pop_df[pop_df["response"] == "yes"]
+        no = pop_df[pop_df["response"] == "no"]
+        stat, p = mannwhitneyu(yes["clr"], no["clr"], alternative="two-sided")
         rows.append({
             "population": pop,
             "n_responders": len(yes),
             "n_non_responders": len(no),
-            "median_responder_pct": round(yes.median(), 3),
-            "median_non_responder_pct": round(no.median(), 3),
+            "median_responder_pct": round(yes["percentage"].median(), 3),
+            "median_non_responder_pct": round(no["percentage"].median(), 3),
             "p_value": p,
         })
 
@@ -111,51 +203,6 @@ def run_stats_test(comparison_df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------- Interactive stratification (dashboard "explore" controls) ----------
-
-def get_filtered_comparison(
-    conn: sqlite3.Connection,
-    sex: list[str] | None = None,
-    project: list[str] | None = None,
-    time_from_treatment_start: list[int] | None = None,
-    age_range: tuple[int, int] | None = None,
-) -> pd.DataFrame:
-    """
-    Same shape as get_responder_comparison, but with optional additional
-    stratification filters layered on top of the required miraclib/PBMC
-    cohort. Any filter left as None is not applied (i.e. "all values").
-
-    SQL still does only retrieval (WHERE on indexed/categorical columns);
-    percentage math stays in pandas, consistent with the rest of this module.
-    """
-    query = """
-        SELECT s.sample_id AS sample, c.population, c.count,
-               sub.response, sub.sex, sub.project, sub.age,
-               s.time_from_treatment_start
-        FROM samples s
-        JOIN cell_counts c ON s.sample_id = c.sample_id
-        JOIN subjects sub ON s.subject_id = sub.subject_id
-        WHERE sub.treatment = 'miraclib' AND s.sample_type = 'PBMC'
-    """
-    df = pd.read_sql(query, conn)
-
-    if sex:
-        df = df[df["sex"].isin(sex)]
-    if project:
-        df = df[df["project"].isin(project)]
-    if time_from_treatment_start:
-        df = df[df["time_from_treatment_start"].isin(time_from_treatment_start)]
-    if age_range:
-        df = df[df["age"].between(age_range[0], age_range[1])]
-
-    if df.empty:
-        return df
-
-    df["total_count"] = df.groupby("sample")["count"].transform("sum")
-    df["percentage"] = df["count"] / df["total_count"] * 100
-    df["response_label"] = df["response"].map({"yes": "Responder", "no": "Non-responder"})
-
-    return df
-
 
 def run_stats_test_safe(comparison_df: pd.DataFrame) -> tuple[str, pd.DataFrame | None]:
     """
@@ -198,29 +245,29 @@ def run_stats_test_safe(comparison_df: pd.DataFrame) -> tuple[str, pd.DataFrame 
     present_populations = [p for p in POPULATIONS if p in comparison_df["population"].unique()]
     for pop in present_populations:
         pop_df = comparison_df[comparison_df["population"] == pop]
-        yes = pop_df[pop_df["response"] == "yes"]["percentage"]
-        no = pop_df[pop_df["response"] == "no"]["percentage"]
+        yes = pop_df[pop_df["response"] == "yes"]
+        no = pop_df[pop_df["response"] == "no"]
 
         if len(yes) == 0 or len(no) == 0:
             rows.append({
                 "population": pop,
                 "n_responders": len(yes),
                 "n_non_responders": len(no),
-                "median_responder_pct": round(yes.median(), 3) if len(yes) else None,
-                "median_non_responder_pct": round(no.median(), 3) if len(no) else None,
+                "median_responder_pct": round(yes["percentage"].median(), 3) if len(yes) else None,
+                "median_non_responder_pct": round(no["percentage"].median(), 3) if len(no) else None,
                 "p_value": None,
                 "status": "no_individuals",
                 "small_n_warning": False,
             })
             continue
 
-        stat, p = mannwhitneyu(yes, no, alternative="two-sided")
+        stat, p = mannwhitneyu(yes["clr"], no["clr"], alternative="two-sided")
         rows.append({
             "population": pop,
             "n_responders": len(yes),
             "n_non_responders": len(no),
-            "median_responder_pct": round(yes.median(), 3),
-            "median_non_responder_pct": round(no.median(), 3),
+            "median_responder_pct": round(yes["percentage"].median(), 3),
+            "median_non_responder_pct": round(no["percentage"].median(), 3),
             "p_value": p,
             "status": "ok",
             "small_n_warning": len(yes) < SMALL_N_THRESHOLD or len(no) < SMALL_N_THRESHOLD,
@@ -264,6 +311,12 @@ def get_full_dataset(conn: sqlite3.Connection) -> pd.DataFrame:
     df["total_count"] = df.groupby("sample")["count"].transform("sum")
     df["percentage"] = df["count"] / df["total_count"] * 100
     df["response_label"] = df["response"].map({"yes": "Responder", "no": "Non-responder"})
+    # CLR computed here, across each sample's full 5-population set, same
+    # timing as percentage/total_count above -- so it stays correct even
+    # if filter_dataset() later narrows down to a subset of populations
+    # (the geometric mean must always be taken over all 5, not whatever's
+    # left after filtering).
+    df = add_clr_column(df)
     return df
 
 
@@ -420,10 +473,11 @@ def compare_cohorts(
     """
     Compares two independently-filtered cohorts (e.g. two different
     filter_dataset() calls) per population, using the same statistical
-    approach as run_stats_test_safe (Mann-Whitney U on percentage,
-    Bonferroni-corrected across populations actually tested) -- but
-    generalized to any two cohorts rather than being tied to the
-    responder/non-responder split.
+    approach as run_stats_test_safe (Mann-Whitney U on the CLR-transformed
+    value, Bonferroni-corrected across populations actually tested) --
+    but generalized to any two cohorts rather than being tied to the
+    responder/non-responder split. See add_clr_column for why CLR, not
+    the raw percentage.
 
     Returns (status, results_df):
 
@@ -453,36 +507,34 @@ def compare_cohorts(
 
     rows = []
     for pop in populations_present:
-        pct_a = df_a[df_a["population"] == pop]["percentage"]
-        pct_b = df_b[df_b["population"] == pop]["percentage"]
-        count_a = df_a[df_a["population"] == pop]["count"]
-        count_b = df_b[df_b["population"] == pop]["count"]
+        pop_a = df_a[df_a["population"] == pop]
+        pop_b = df_b[df_b["population"] == pop]
 
-        if len(pct_a) == 0 or len(pct_b) == 0:
+        if len(pop_a) == 0 or len(pop_b) == 0:
             rows.append({
                 "population": pop,
-                "n_a": len(pct_a), "n_b": len(pct_b),
-                "avg_count_a": round(count_a.mean(), 2) if len(count_a) else None,
-                "avg_count_b": round(count_b.mean(), 2) if len(count_b) else None,
-                "avg_pct_a": round(pct_a.mean(), 3) if len(pct_a) else None,
-                "avg_pct_b": round(pct_b.mean(), 3) if len(pct_b) else None,
+                "n_a": len(pop_a), "n_b": len(pop_b),
+                "avg_count_a": round(pop_a["count"].mean(), 2) if len(pop_a) else None,
+                "avg_count_b": round(pop_b["count"].mean(), 2) if len(pop_b) else None,
+                "avg_pct_a": round(pop_a["percentage"].mean(), 3) if len(pop_a) else None,
+                "avg_pct_b": round(pop_b["percentage"].mean(), 3) if len(pop_b) else None,
                 "p_value": None,
                 "status": "no_individuals",
                 "small_n_warning": False,
             })
             continue
 
-        stat, p = mannwhitneyu(pct_a, pct_b, alternative="two-sided")
+        stat, p = mannwhitneyu(pop_a["clr"], pop_b["clr"], alternative="two-sided")
         rows.append({
             "population": pop,
-            "n_a": len(pct_a), "n_b": len(pct_b),
-            "avg_count_a": round(count_a.mean(), 2),
-            "avg_count_b": round(count_b.mean(), 2),
-            "avg_pct_a": round(pct_a.mean(), 3),
-            "avg_pct_b": round(pct_b.mean(), 3),
+            "n_a": len(pop_a), "n_b": len(pop_b),
+            "avg_count_a": round(pop_a["count"].mean(), 2),
+            "avg_count_b": round(pop_b["count"].mean(), 2),
+            "avg_pct_a": round(pop_a["percentage"].mean(), 3),
+            "avg_pct_b": round(pop_b["percentage"].mean(), 3),
             "p_value": p,
             "status": "ok",
-            "small_n_warning": len(pct_a) < SMALL_N_THRESHOLD or len(pct_b) < SMALL_N_THRESHOLD,
+            "small_n_warning": len(pop_a) < SMALL_N_THRESHOLD or len(pop_b) < SMALL_N_THRESHOLD,
         })
 
     results = pd.DataFrame(rows)
