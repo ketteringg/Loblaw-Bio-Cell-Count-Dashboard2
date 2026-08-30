@@ -152,6 +152,17 @@ def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, 
         st.plotly_chart(fig_pct, width='stretch', key=f"{key_prefix}_avg_pct_chart")
 
 
+def format_pvalue(p) -> str:
+    """Formats a p-value for display: avoids showing a bare '0' for a
+    genuinely tiny (but nonzero) p-value, which would misleadingly imply
+    an exact zero rather than 'too small to show at this precision'."""
+    if pd.isna(p):
+        return ""
+    if p < 0.00001:
+        return "<0.00001"
+    return f"{p:.5f}"
+
+
 def render_stats_messages(status: str, results: pd.DataFrame | None):
     """Shared rendering of the four run_stats_test_safe cases."""
     if status == "no_samples":
@@ -437,7 +448,9 @@ with tab_explorer:
             if status == "ok":
                 fig = render_boxplot(filtered, results, color_map=RESPONSE_COLORS)
                 st.plotly_chart(fig, width='stretch', key="explorer_tab_boxplot")
-                display_results = results.drop(columns=["status", "small_n_warning"])
+                display_results = results.drop(columns=["status", "small_n_warning"]).copy()
+                display_results["p_value"] = display_results["p_value"].apply(format_pvalue)
+                display_results["p_value_bonferroni"] = display_results["p_value_bonferroni"].apply(format_pvalue)
                 st.dataframe(display_results, width='stretch', hide_index=True)
 
 
@@ -500,7 +513,7 @@ with tab_compare:
             st.write("**Mann-Whitney U results** (Bonferroni-corrected across populations tested)")
             display_cmp = results.drop(columns=["status", "small_n_warning"]).copy()
             if "p_value" in display_cmp.columns:
-                display_cmp["p_value"] = display_cmp["p_value"].round(5)
+                display_cmp["p_value"] = display_cmp["p_value"].apply(format_pvalue)
             if "p_value_bonferroni" in display_cmp.columns:
-                display_cmp["p_value_bonferroni"] = display_cmp["p_value_bonferroni"].round(5)
+                display_cmp["p_value_bonferroni"] = display_cmp["p_value_bonferroni"].apply(format_pvalue)
             st.dataframe(display_cmp, width='stretch', hide_index=True)
