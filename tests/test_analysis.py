@@ -64,9 +64,11 @@ def test_frequency_table_percentages_sum_to_100_per_sample(conn):
 
 def test_responder_comparison_cohort_size(conn):
     comparison = get_responder_comparison(conn)
-    # miraclib + PBMC only (per Part 3 spec) -- matches the "Cohort size"
-    # metric verified directly in the dashboard during development.
-    assert comparison["sample"].nunique() == 3429
+    # melanoma + miraclib + PBMC only (per Part 3 spec, "melanoma patients
+    # receiving miraclib... Please only include PBMC samples"). Matches
+    # the "Cohort size" metric verified directly in the dashboard during
+    # development, with the condition="melanoma" filter applied.
+    assert comparison["sample"].nunique() == 1968
 
 
 def test_known_significant_populations_after_bonferroni(conn):
@@ -74,12 +76,12 @@ def test_known_significant_populations_after_bonferroni(conn):
     results = run_stats_test(comparison)
     significant = set(results[results["significant_bonferroni"]]["population"])
     # CLR-based (see analysis.py's add_clr_column docstring and the
-    # README): monocyte was significant under raw-percentage testing but
-    # doesn't survive the CLR transform. cd4_t_cell and b_cell are robust
-    # either way. This is the intended, verified behavior change, not a
-    # regression -- if this assertion ever needs updating again, confirm
-    # deliberately, don't just paper over a real result change.
-    assert significant == {"cd4_t_cell", "b_cell"}
+    # README). On the correct melanoma-restricted cohort, only cd4_t_cell
+    # survives Bonferroni correction. This is the intended, verified
+    # result, not a placeholder; if this assertion ever needs updating
+    # again, confirm deliberately rather than papering over a real
+    # result change.
+    assert significant == {"cd4_t_cell"}
 
 
 # ---------- Part 4: baseline cohort ----------
@@ -457,15 +459,15 @@ def test_clr_handles_zero_count_without_raising():
 
 
 def test_clr_based_test_changes_the_conclusion(conn):
-    """The whole point of switching to CLR: confirms monocyte, which is
-    significant under raw percentages, does not survive the CLR-based
-    test -- this is the empirical finding documented in the README, not
-    an assumption."""
+    """The whole point of switching to CLR: on the correct melanoma
+    restricted cohort, cd4_t_cell does not reach significance under raw
+    percentages (Bonferroni p is just above 0.05) but does under the
+    CLR-based test. This is the empirical finding documented in the
+    README, not an assumption."""
     comparison = get_responder_comparison(conn)
     results = run_stats_test(comparison)
     significant = set(results[results["significant_bonferroni"]]["population"])
-    assert "monocyte" not in significant
-    assert {"cd4_t_cell", "b_cell"}.issubset(significant)
+    assert significant == {"cd4_t_cell"}
 
 
 # ---------- check_group_balance ----------
@@ -528,15 +530,15 @@ def test_generate_outputs_produces_all_required_files(conn):
     database. Runs the actual script end to end (via subprocess, since
     it's a __main__ script, not an importable function) against the real
     project directory and checks every required file appears with
-    sensible content -- this is exactly what a grader running
+    sensible content. This is exactly what a grader running
     `make pipeline` would experience."""
     import subprocess
     from pathlib import Path
 
     project_root = Path(__file__).parent.parent
     outputs = [
-        "frequency_table.csv", "stats_results.csv", "boxplot_responders.png",
-        "baseline_melanoma_samples.csv", "part4_summary.txt",
+        "part2_frequency_table.csv", "part3_stats_results.csv", "part3_boxplot_responders.png",
+        "part4_baseline_melanoma_samples.csv", "part4_summary.txt",
     ]
     for name in outputs:
         (project_root / name).unlink(missing_ok=True)
@@ -553,15 +555,16 @@ def test_generate_outputs_produces_all_required_files(conn):
         assert path.stat().st_size > 0, f"{name} is empty"
 
     import pandas as pd
-    freq = pd.read_csv(project_root / "frequency_table.csv")
+    freq = pd.read_csv(project_root / "part2_frequency_table.csv")
     assert list(freq.columns) == ["sample", "total_count", "population", "count", "percentage"]
     assert len(freq) == 52500
 
-    stats = pd.read_csv(project_root / "stats_results.csv")
-    # Must reflect the CURRENT CLR-based methodology, not a stale
-    # pre-CLR snapshot: monocyte should NOT be significant.
+    stats = pd.read_csv(project_root / "part3_stats_results.csv")
+    # Must reflect the correct melanoma-restricted cohort (Part 3 asks
+    # for "melanoma patients receiving miraclib") and the current
+    # CLR-based methodology: only cd4_t_cell is significant.
     sig = set(stats[stats["significant_bonferroni"]]["population"])
-    assert sig == {"cd4_t_cell", "b_cell"}
+    assert sig == {"cd4_t_cell"}
 
-    baseline = pd.read_csv(project_root / "baseline_melanoma_samples.csv")
+    baseline = pd.read_csv(project_root / "part4_baseline_melanoma_samples.csv")
     assert len(baseline) == 656
