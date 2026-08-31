@@ -100,18 +100,10 @@ GROUP_FILL_ALPHA = 0.55
 # population key swatches -- all deliberately share this one constant so
 # they stay visually consistent with each other).
 #
-# Moderate rather than very light: 0.15 read as too faint, especially as a
-# bar-chart fill (bars need to be clearly visible as the primary data
-# there, not just a background wash). Kept well short of full opacity,
-# though, because of documented history: at full opacity, the strongly
-# saturated, differently-hued backgrounds behind each boxplot facet
-# created a real optical effect where identical gridlines appeared to
-# have different thickness depending on which background they crossed
-# (confirmed the gridlines themselves were byte-for-byte identical across
-# every facet -- same width, color, range, tick spacing -- so the
-# apparent inconsistency was purely the background contrast). That issue
-# was specifically observed near full opacity, not at this more moderate
-# level, but the margin is deliberate rather than assumed safe.
+# Moderate rather than very light: 0.15 reads too faint, especially as a
+# bar-chart fill. Kept well short of full opacity, where the saturated,
+# differently-hued facet backgrounds make identical gridlines appear to
+# vary in thickness depending on the background they cross.
 POPULATION_BACKGROUND_OPACITY = 0.3
 
 CUSTOM_CSS = """
@@ -236,8 +228,8 @@ def darken_hex(hex_color: str, factor: float = 0.35) -> str:
     """Returns a darker shade of hex_color (multiplies each RGB channel
     toward 0 by `factor`). Used for box outlines/median lines: Plotly's
     Box trace has exactly one `line` property that controls BOTH the
-    outline and the median line (verified directly -- there's no separate
-    median styling), so setting it identical to fillcolor makes the
+    outline and the median line (there is no separate median styling),
+    so setting it identical to fillcolor makes the
     median line invisible against the fill. A darker shade keeps both
     visible without introducing a third color."""
     def to_rgb(h):
@@ -278,10 +270,8 @@ def render_boxplot(
     Returns (fig, present_populations): present_populations is the exact,
     already-computed list of populations this figure actually faceted,
     in the exact order they were graphed. Callers should pass this
-    directly to render_population_key rather than recomputing their own
-    guess at the same list -- two independent computations of "which
-    populations, in what order" can drift apart if either one's filtering
-    logic changes later, even though they happen to agree today.
+    directly to render_population_key rather than recomputing the list,
+    so the key always matches what was actually graphed.
     """
     groups = group_order or sorted(comparison_df[x_col].dropna().unique())
     default_colors = ["#6B7280", "#9CA3AF", "#D1D5DB", "#4B5563", "#111827", "#78716C"]
@@ -289,19 +279,12 @@ def render_boxplot(
 
     # Computed BEFORE building the figure, and used directly in
     # category_orders below -- this must be the actual list of facets
-    # Plotly creates. Passing the full POPULATIONS constant instead (all
-    # 5, regardless of what's actually in comparison_df) was a real bug:
-    # Plotly Express creates one facet per category_orders entry even
-    # when a category has zero matching rows, so a population-filtered
-    # cohort (e.g. just b_cell + cd4_t_cell selected) produced 5 facets,
-    # 3 of them empty with Plotly's raw unprocessed "population=X" title
-    # text (never reached by the p-value-replacement loop below, which
-    # only iterates present populations). Worse, the later loops that
-    # position backgrounds/labels/titles by index (present_populations[i]
-    # -> facet slot i) silently landed on the WRONG facet whenever an
-    # empty facet was interspersed before a present one in canonical
-    # order -- e.g. cd4_t_cell's own label rendering on cd8_t_cell's
-    # empty facet, confirmed directly against a real filtered cohort.
+    # Plotly creates. Plotly Express creates one facet per
+    # category_orders entry even when a category has zero matching rows,
+    # and the loops below position backgrounds/labels/titles by index
+    # (present_populations[i] -> facet slot i), so passing the full
+    # POPULATIONS constant here would both produce empty facets and
+    # misalign every facet-indexed element onto the wrong facet.
     present_populations = [p for p in POPULATIONS if p in comparison_df["population"].unique()]
 
     fig = px.box(
@@ -366,8 +349,7 @@ def render_boxplot(
     # bound lands exactly on 0 (see y_range above), so Plotly's separate
     # zero-line was stacking directly on top of the regular gridline at
     # that same position, rendering as a visibly thicker line there than
-    # at any other tick -- confirmed by checking the computed range, not
-    # just guessed. Tick labels are shown on every facet (not just the
+    # at any other tick. Tick labels are shown on every facet (not just the
     # first), even though the scale is shared, per explicit request.
     fig.update_yaxes(
         matches="y", range=y_range,
@@ -470,15 +452,10 @@ def render_population_key(populations: list[str]):
 
     `populations` should be the exact list render_boxplot/
     render_n_group_boxplot returned as their second value (the
-    present_populations they actually faceted, already in graphed order)
-    -- not independently recomputed from a stats table. Passing
-    results["population"].tolist() used to work by coincidence (both
-    computations happened to apply the same canonical-order filter), but
-    that's fragile: two independent computations of "which populations,
-    in what order" can silently drift apart if either one's logic changes
-    later. This function still deduplicates and canonical-orders its
-    input defensively, but the caller contract is now "pass what was
-    actually graphed."
+    present_populations they actually faceted, already in graphed order),
+    not independently recomputed from a stats table. This function still
+    deduplicates and canonical-orders its input defensively, but the
+    caller contract is "pass what was actually graphed."
 
     Swatch color uses POPULATION_BACKGROUND_OPACITY, matching the actual
     facet background opacity exactly -- rather than a solid, fully opaque
@@ -511,9 +488,7 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
     b_cell ~10k cells vs cd4_t_cell ~30k) is far larger than
     within-population variation across comparison groups (often under
     1-2%), so a shared y-axis makes real, correctly-computed differences
-    visually indistinguishable. Verified directly against real data
-    (per-day averages genuinely differ, just by a small amount) before
-    concluding this was a display problem, not a computation bug.
+    visually indistinguishable.
 
     Both branches use marker_opacity=GROUP_FILL_ALPHA, the same value
     the boxplot fills use (see render_boxplot), so the same population
@@ -559,28 +534,19 @@ def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, 
     response, or cohort, or timepoint). All bars, whether colored by
     population or by a comparison group, use marker_opacity=GROUP_FILL_ALPHA:
     the same fill opacity the boxplot uses, so the same color reads at
-    the same visual intensity in both chart types (no hatch pattern: an
-    earlier version used pattern_shape as a colorblind safety measure,
-    but Plotly's default pattern assigns the *first* category an
-    empty/solid pattern and the *second* a diagonal-hatch fill, which
-    reads as "not fully filled in" rather than as a deliberate texture,
-    removed in favor of just keeping the Okabe-Ito color choices
-    themselves colorblind-safe, which they already are).
+    the same visual intensity in both chart types. No hatch pattern:
+    Plotly's default pattern_shape assigns the first category an
+    empty/solid pattern and the second a diagonal hatch, which reads as
+    "not fully filled in" rather than a deliberate texture, and the
+    Okabe-Ito color choices are already colorblind-safe on their own.
 
-    group_order pins the legend/bar order for color_col explicitly. This
-    matters: without it, Plotly Express sorts a string column's values
-    alphabetically by default, which silently put "Non-responder" before
-    "Responder" here (while the distribution boxplot elsewhere used an
-    explicit Responder-first order), a real inconsistency, not a
-    stylistic choice, caught by comparing the two side by side."""
+    group_order pins the legend/bar order for color_col explicitly:
+    without it, Plotly Express sorts a string column alphabetically,
+    which would put "Non-responder" before "Responder"."""
     # Uses only the populations actually present in avg_table, not the
-    # full POPULATIONS constant. The same bug fixed earlier for
-    # render_boxplot's facets applies identically here: Plotly Express
-    # creates one x-axis category per category_orders entry even with
-    # zero matching rows, so a population-filtered cohort (e.g. just
-    # b_cell + cd4_t_cell selected) reserved x-axis space for all 5
-    # populations, leaving empty gaps where cd8_t_cell/nk_cell/monocyte
-    # would be -- confirmed directly against a real filtered chart.
+    # full POPULATIONS constant: Plotly Express creates one x-axis
+    # category per category_orders entry even with zero matching rows,
+    # which would leave empty gaps for populations a filter excluded.
     present_populations = [p for p in POPULATIONS if p in avg_table["population"].unique()]
     category_orders = {"population": present_populations}
     if group_order:
@@ -656,8 +622,7 @@ def render_avg_table_and_charts(
     """Average cell count/percentage table (+ download) and bar charts,
     given an already-built avg_table. Shared rendering so this section
     looks and behaves identically across every tab -- the table itself
-    (not just the charts) is always shown and always downloadable, which
-    an earlier version of By Date and Custom mode omitted."""
+    (not just the charts) is always shown and always downloadable."""
     if avg_table.empty:
         st.info("No data available for this cohort.")
         return
@@ -1022,12 +987,9 @@ tab_default, tab_resp, tab_pop, tab_date, tab_custom = st.tabs(
 # every tab's content on every rerun (just CSS-hides the inactive ones),
 # so widget state naturally survives switching tabs. A radio-driven
 # if/elif only instantiates the currently-selected branch's widgets each
-# run -- Streamlit clears session_state for any widget that disappears
-# from the script that way, so filter selections were being silently
-# reset every time you switched views. Confirmed directly (not assumed):
-# selecting specific populations in By Population mode, switching to
-# Default, then switching back reset the selection under the old radio
-# structure; verified this doesn't happen with tabs.
+# run, and Streamlit clears session_state for any widget that disappears
+# from the script, which would silently reset filter selections on every
+# view switch.
 
 
 # ---------- Default: single-cohort exploration (no comparison) ----------
