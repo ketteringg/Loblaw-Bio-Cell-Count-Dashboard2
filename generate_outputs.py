@@ -21,6 +21,8 @@ Run after load_data.py:
 Writes to the repository root (file names match the assignment part
 each one answers):
     part2_frequency_table.csv           Part 2
+    part2_sample_total_counts.csv       Part 2 (per-sample total cell
+                                         count step, shown standalone)
     part3_stats_results.csv             Part 3
     part3_boxplot_responders.png        Part 3
     part4_baseline_melanoma_samples.csv Part 4.1
@@ -37,6 +39,7 @@ import numpy as np
 from analysis import (
     POPULATIONS,
     get_frequency_table,
+    get_sample_totals,
     get_responder_comparison,
     run_stats_test,
     get_baseline_melanoma_samples,
@@ -60,6 +63,17 @@ def main() -> None:
         freq = get_frequency_table(conn)
         freq.to_csv(ROOT / "part2_frequency_table.csv", index=False)
         print(f"Wrote part2_frequency_table.csv ({len(freq)} rows)")
+
+        # Part 2's specific intermediate step, spelled out as its own
+        # file: "For each sample, calculate the total number of cells by
+        # summing the counts across all five populations." One row per
+        # sample rather than one row per (sample, population), since
+        # that total already appears repeated 5 times inside
+        # part2_frequency_table.csv and this makes the standalone step
+        # easy to check directly.
+        totals = get_sample_totals(conn)
+        totals.to_csv(ROOT / "part2_sample_total_counts.csv", index=False)
+        print(f"Wrote part2_sample_total_counts.csv ({len(totals)} rows)")
 
         # --- Part 3: stats + boxplot ---
         # get_responder_comparison() already restricts to melanoma,
