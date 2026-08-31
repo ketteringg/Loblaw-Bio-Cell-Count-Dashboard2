@@ -27,6 +27,7 @@ from analysis import (
     get_filtered_frequency_table,
     get_population_averages,
     compare_n_groups,
+    compare_n_groups_paired,
     compare_populations_paired,
 )
 from load_data import validate, DataValidationError
@@ -265,6 +266,78 @@ def test_compare_n_groups_drops_empty_group_and_compares_the_rest(conn):
     assert status == "ok"
     pairs_seen = set(zip(results["group_a"], results["group_b"]))
     assert pairs_seen == {("A", "B")}  # the empty group never appears in any pair
+
+
+# ---------- compare_n_groups_paired (By Date's repeated-measures test) ----------
+
+def test_compare_n_groups_paired_insufficient_groups(conn):
+    full = get_full_dataset(conn)
+    empty = filter_dataset(full, condition=["nonexistent"])
+    non_empty = filter_dataset(full, condition=["melanoma"])
+    status, results = compare_n_groups_paired({"A": empty, "B": non_empty})
+    assert status == "insufficient_groups"
+    assert results is None
+
+
+def test_compare_n_groups_paired_matches_subjects_across_timepoints(conn):
+    """Every subject is sampled once per timepoint, so pairing any two
+    timepoints within a cohort must match every subject: n_a and n_b both
+    equal the cohort's subject count on every row."""
+    full = get_full_dataset(conn)
+    cohort = filter_dataset(full, treatment=["miraclib"], sample_type=["PBMC"])
+    n_subjects = cohort["subject_id"].nunique()
+    group_dfs = {
+        f"Day {t}": filter_dataset(cohort, time_from_treatment_start=[t])
+        for t in (0, 7, 14)
+    }
+    status, results = compare_n_groups_paired(group_dfs)
+    assert status == "ok"
+    assert len(results) == 15  # 5 populations x 3 timepoint pairs
+    assert (results["n_a"] == n_subjects).all()
+    assert (results["n_b"] == n_subjects).all()
+
+
+def test_compare_n_groups_paired_no_overlap_reports_no_individuals(conn):
+    """Groups that share no subjects have nothing to pair: every row
+    should say so explicitly rather than silently testing nothing."""
+    full = get_full_dataset(conn)
+    a = filter_dataset(full, project=["prj1"], population=["b_cell"])
+    b = filter_dataset(full, project=["prj2"], population=["b_cell"])
+    status, results = compare_n_groups_paired({"A": a, "B": b})
+    assert status == "ok"
+    assert (results["status"] == "no_individuals").all()
+    assert results["p_value"].isna().all()
+    assert not results["significant_bonferroni"].any()
+
+
+def test_paired_by_date_finds_the_responder_cd4_trend_unpaired_misses(conn):
+    """The reason By Date uses the paired test (see README, "Statistical
+    approach"): among melanoma miraclib PBMC responders, cd4_t_cell's
+    within-subject rise from day 0 to day 14 survives Bonferroni
+    correction under the paired Wilcoxon but not under the unpaired
+    Mann-Whitney. If this ever flips, the paired-vs-unpaired rationale
+    in the README needs revisiting alongside it."""
+    full = get_full_dataset(conn)
+    cohort = filter_dataset(
+        full, condition=["melanoma"], treatment=["miraclib"],
+        sample_type=["PBMC"], response=["yes"],
+    )
+    group_dfs = {
+        f"Day {t}": filter_dataset(cohort, time_from_treatment_start=[t])
+        for t in (0, 7, 14)
+    }
+
+    def cd4_day0_vs_14(results):
+        return results[
+            (results["population"] == "cd4_t_cell")
+            & (results["group_a"] == "Day 0")
+            & (results["group_b"] == "Day 14")
+        ].iloc[0]
+
+    _, paired = compare_n_groups_paired(group_dfs)
+    _, unpaired = compare_n_groups(group_dfs)
+    assert bool(cd4_day0_vs_14(paired)["significant_bonferroni"]) is True
+    assert bool(cd4_day0_vs_14(unpaired)["significant_bonferroni"]) is False
 
 
 # ---------- compare_populations_paired ----------
