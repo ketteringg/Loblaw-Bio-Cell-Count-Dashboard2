@@ -481,14 +481,13 @@ def render_population_key(populations: list[str]):
 def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map, category_orders, is_comparison, yaxis_tickformat=None):
     """Builds one average-count or average-percentage bar chart. When
     is_comparison is True (color_col is a comparison group, not
-    population), facets by population instead of putting population on
-    the shared x-axis, deliberately WITHOUT matches='y' (unlike the
-    boxplot), so each population gets its own independently-scaled
-    y-axis. This matters concretely: between-population variation (e.g.
-    b_cell ~10k cells vs cd4_t_cell ~30k) is far larger than
-    within-population variation across comparison groups (often under
-    1-2%), so a shared y-axis makes real, correctly-computed differences
-    visually indistinguishable.
+    population), facets by population on a shared y-axis (matches='y',
+    like the boxplot), so between-population scale differences (e.g.
+    b_cell ~10k cells vs cd4_t_cell ~30k) read directly from bar
+    heights. Within-population differences across comparison groups are
+    often under 1-2%, too small to read from zero-based bars at any
+    scale; the average table and the stats table are the right place to
+    read those.
 
     Both branches use marker_opacity=GROUP_FILL_ALPHA, the same value
     the boxplot fills use (see render_boxplot), so the same population
@@ -504,22 +503,16 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
         fig = px.bar(
             avg_table, x=color_col, y=y_col, color=color_col,
             color_discrete_map=color_map, facet_col="population", facet_col_wrap=5,
-            facet_col_spacing=0.05,
             title=title, labels={y_col: y_label}, category_orders=category_orders,
         )
-        # Each facet keeps its own y scale (matches=None) so small
-        # within-population group differences aren't crushed by the much
-        # larger between-population spread. Two consequences are handled
-        # here: tick labels go on EVERY facet (Plotly Express only labels
-        # the leftmost column by default, which would leave the other
-        # facets on silent, unlabeled scales of their own), and gridlines
-        # are turned off entirely (with five independent ranges, each
-        # facet's gridlines land at different heights, which reads as
-        # broken rather than informative).
-        fig.update_yaxes(
-            matches=None, showgrid=False, showticklabels=True,
-            tickfont=dict(size=9),
-        )
+        # All facets share one y scale (matches="y", labeled on the
+        # leftmost facet), so between-population scale differences
+        # (b_cell ~10k vs cd4_t_cell ~30k) read directly from bar
+        # heights and gridlines align across facets. Within-population
+        # differences between comparison groups are often under 2%,
+        # too small to read from zero-based bars at any scale; the
+        # average table and the stats table are the place to read those.
+        fig.update_yaxes(matches="y", gridcolor="#000000", gridwidth=0.5)
         if yaxis_tickformat:
             fig.update_yaxes(tickformat=yaxis_tickformat)
         fig.update_xaxes(showticklabels=False, title_text=None)
