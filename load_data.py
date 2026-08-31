@@ -8,17 +8,16 @@ Run directly:
     python load_data.py
 
 No CLI arguments or module-style execution (`python -m`) required or supported.
-Must be run from the repository root (expects cell-count.csv and schema.sql
-to be in the same directory as this script).
+Paths resolve relative to this script's own location, so it can be invoked
+from any working directory; cell-count.csv and schema.sql just need to sit
+in the same directory as this script.
 """
 import sqlite3
 from pathlib import Path
 
 import pandas as pd
 
-# Resolve paths relative to this script's location, not the current working
-# directory, so this works regardless of where `python load_data.py` is
-# invoked from.
+# Paths anchored to this script's location, not the CWD (see module docstring).
 ROOT = Path(__file__).parent
 CSV_PATH = ROOT / "cell-count.csv"
 SCHEMA_PATH = ROOT / "schema.sql"
