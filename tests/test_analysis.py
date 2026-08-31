@@ -6,8 +6,6 @@ verified throughout development: known row counts, the four-case stats
 handling, the population-filter percentage invariant, and specific
 cross-checked numeric results (including the graded assignment answer).
 """
-import math
-
 import pandas as pd
 import pytest
 
@@ -26,7 +24,6 @@ from analysis import (
     get_avg_b_cells_melanoma_male_responders,
     get_full_dataset,
     filter_dataset,
-    get_cohort_summary,
     get_filtered_frequency_table,
     get_population_averages,
     compare_n_groups,
@@ -511,9 +508,13 @@ def test_group_balance_handles_single_level_stratify_col():
 
 
 def test_group_balance_on_real_data_project(conn):
-    """Response is balanced across project in the real Part 3 cohort."""
+    """Response is balanced across project in the real Part 3 cohort
+    (melanoma + miraclib + PBMC), matching the confounder-check result
+    reported in the README (p ~ 0.91)."""
     full = get_full_dataset(conn)
-    cohort = filter_dataset(full, treatment=["miraclib"], sample_type=["PBMC"])
+    cohort = filter_dataset(
+        full, condition=["melanoma"], treatment=["miraclib"], sample_type=["PBMC"]
+    )
     result = check_group_balance(cohort, group_col="response", stratify_col="project")
     assert bool(result["balanced"]) is True
 
