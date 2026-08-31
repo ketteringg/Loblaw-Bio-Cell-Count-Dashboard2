@@ -59,9 +59,9 @@ row counts, the edge-case handling in the stats functions (no samples, no
 response data, no individuals in a group, small-n warning), the invariant
 that a population filter doesn't change what percentages are computed
 against, specific cross-checked numeric results (including the
-assignment's form-question answer), the N-group and paired
-population-vs-population comparisons, and `load_data.py`'s validation
-logic. `tests/test_app.py` uses Streamlit's official AppTest to run the
+assignment's form-question answer), the N-group, paired-timepoint, and
+paired population-vs-population comparisons, and `load_data.py`'s
+validation logic. `tests/test_app.py` uses Streamlit's official AppTest to run the
 dashboard headlessly and check representative scenarios per tab. `make
 test` is self-sufficient: it installs dev dependencies and builds
 `cell_counts.db` first if it's missing.
@@ -309,17 +309,40 @@ from this cohort. To reproduce this in the dashboard, apply all three
 filters (condition, treatment, sample type) on the Responder vs
 Non-responder tab.
 
-**Paired vs. unpaired tests.** Every comparison in the dashboard is
-Mann-Whitney (unpaired) on CLR values, except the By Population tab,
-which uses the **Wilcoxon signed-rank test** (paired). The reason is
-structural: Responder vs Non-responder, By Date, and Custom all compare
-different sets of samples against each other, genuinely independent
-groups, which is what Mann-Whitney assumes. By Population compares the
-same samples' `b_cell%` against their `cd4_t_cell%`, two measurements
-from the same sample tied together by the same closure constraint, so an
-unpaired test would ignore a real dependency in the data. Wilcoxon
-signed-rank is the non-parametric, paired analogue, run on each pair of
-populations' CLR values for the matched set of samples present in both.
+**Paired vs. unpaired tests.** Which test a tab uses follows from
+whether its comparison groups are independent:
+
+- **Responder vs Non-responder** and **Custom** compare different sets
+  of subjects -- genuinely independent groups -- and use the unpaired
+  **Mann-Whitney U** test on CLR values.
+- **By Population** compares measurements taken from the same samples
+  (one sample's `b_cell%` against its own `cd4_t_cell%`, tied together
+  by the closure constraint), so it uses the paired **Wilcoxon
+  signed-rank** test on the matched samples.
+- **By Date** also uses the paired **Wilcoxon signed-rank**, pairing on
+  subject (`compare_n_groups_paired` in `analysis.py`). Every subject
+  in this dataset is sampled exactly once at each timepoint with a
+  constant sample type, so any cohort's "Day 0" and "Day 14" groups are
+  the same subjects measured repeatedly -- repeated measures, not
+  independent groups. The test therefore runs on each subject's own
+  within-subject change rather than pooling the two days as if they
+  were unrelated crowds.
+
+Like the CLR choice above, the paired choice changes the answer for
+this dataset. Among melanoma miraclib PBMC **responders**, `cd4_t_cell`
+rises during treatment (a median within-subject change of roughly +1.2
+percentage points from day 0 to day 14, while non-responders stay
+flat). Tested unpaired, that trend does not survive Bonferroni
+correction across the tab's 15 tests (p=0.0103, corrected ~0.15);
+tested paired, it does (p=0.0032, corrected ~0.048). A regression test
+pins this exact divergence
+(`test_paired_by_date_finds_the_responder_cd4_trend_unpaired_misses`).
+The asymmetry is worth stating: an unpaired test on paired data costs
+sensitivity, not validity -- it can miss real within-subject changes
+but does not manufacture false positives -- which is also why this
+distinction never touched Part 3, where responders and non-responders
+are different people and unpaired Mann-Whitney is exactly the right
+tool.
 
 ## Confounder check
 
@@ -364,18 +387,22 @@ or more groups, split a different way:
   against each other within the same cohort, using the paired Wilcoxon
   signed-rank test (see "Statistical approach" for why paired).
 - **By Date**: select 2 or all 3 timepoints and compare them against each
-  other, per population. Selecting 3 timepoints tests every pair.
+  other, per population, using the paired Wilcoxon signed-rank test:
+  every subject is sampled at every timepoint, so timepoint groups are
+  the same subjects measured repeatedly (see "Statistical approach").
+  Selecting 3 timepoints tests every pair.
 - **Custom**: build 2 to 4 independent cohorts with any combination of
   filters and compare them all against each other. Cohort labels must be
   unique; the dashboard shows an error rather than silently merging
   identically-labeled cohorts.
 
 Any number of groups beyond 2 is handled by testing every pairwise
-combination, Bonferroni-corrected across all pairs and populations tested
-together (`compare_n_groups` in `analysis.py`). The correction gets
-stricter fast as groups are added (3 groups is 3 pairs per population, 4
-groups is 6), which is the real statistical cost of pairwise tests over a
-single omnibus test like Kruskal-Wallis.
+combination, Bonferroni-corrected across all pairs and populations
+tested together (`compare_n_groups` in `analysis.py` for independent
+groups, `compare_n_groups_paired` for By Date's repeated measures). The
+correction gets stricter fast as groups are added (3 groups is 3 pairs
+per population, 4 groups is 6), which is the real statistical cost of
+pairwise tests over a single omnibus test like Kruskal-Wallis.
 
 All four comparison tabs share the same section order (cohort summary,
 average table + charts, frequency table, distribution boxplot, stats
