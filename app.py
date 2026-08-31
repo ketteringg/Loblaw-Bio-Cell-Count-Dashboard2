@@ -3,13 +3,19 @@ app.py
 
 Interactive dashboard for the Loblaw Bio cell-count analysis.
 
-Two tabs: Custom Explorer (any single cohort) and Cohort Comparison (any
-two cohorts side by side). There are no fixed tabs for the assignment's
-Part 2/3/4 cohorts specifically. Those are just special cases of what
-Custom Explorer / Cohort Comparison can already produce by setting the
-equivalent filters, so a dedicated tab for each would just be showing the
-same underlying data twice. See README.md for how to reproduce those
-specific answers.
+Five tabs: Default (single-cohort exploration -- cohort summary, average
+cell counts, frequency table, population distribution), and four
+comparison tabs each splitting the data a different way -- Responder vs
+Non-responder, By Population, By Date, and Custom (2-4 independently
+filtered cohorts). Every comparison tab shares the same section order
+(cohort summary, average table + charts, frequency table, distribution
+boxplot, stats table) and the same stats-table controls (grouped by cell
+type by default, with a toggle to surface significant results instead).
+There are no fixed tabs for the assignment's Part 2/3/4 cohorts
+specifically -- those are special cases of what these tabs already
+produce by setting the equivalent filters, so a dedicated tab for each
+would just be showing the same underlying data twice. See README.md for
+how to reproduce those specific answers.
 
 Run with:
     streamlit run app.py
@@ -264,10 +270,27 @@ def render_boxplot(
     default_colors = ["#6B7280", "#9CA3AF", "#D1D5DB", "#4B5563", "#111827", "#78716C"]
     colors = group_colors or default_colors[:len(groups)]
 
+    # Computed BEFORE building the figure, and used directly in
+    # category_orders below -- this must be the actual list of facets
+    # Plotly creates. Passing the full POPULATIONS constant instead (all
+    # 5, regardless of what's actually in comparison_df) was a real bug:
+    # Plotly Express creates one facet per category_orders entry even
+    # when a category has zero matching rows, so a population-filtered
+    # cohort (e.g. just b_cell + cd4_t_cell selected) produced 5 facets,
+    # 3 of them empty with Plotly's raw unprocessed "population=X" title
+    # text (never reached by the p-value-replacement loop below, which
+    # only iterates present populations). Worse, the later loops that
+    # position backgrounds/labels/titles by index (present_populations[i]
+    # -> facet slot i) silently landed on the WRONG facet whenever an
+    # empty facet was interspersed before a present one in canonical
+    # order -- e.g. cd4_t_cell's own label rendering on cd8_t_cell's
+    # empty facet, confirmed directly against a real filtered cohort.
+    present_populations = [p for p in POPULATIONS if p in comparison_df["population"].unique()]
+
     fig = px.box(
         comparison_df, x=x_col, y="percentage", facet_col="population",
         facet_col_wrap=5, points="outliers",
-        category_orders={"population": POPULATIONS, x_col: groups},
+        category_orders={"population": present_populations, x_col: groups},
         labels={"percentage": "% of total cells", x_col: ""},
         color=x_col,  # forces one trace per (facet, group); overridden below
     )
@@ -278,7 +301,6 @@ def render_boxplot(
     # only the fill is translucent; line/marker stay fully opaque solid
     # hex, since Box traces have exactly one blanket `opacity` that would
     # otherwise fade everything (fill, outline, median line) together.
-    present_populations = [p for p in POPULATIONS if p in comparison_df["population"].unique()]
     for i, trace in enumerate(fig.data):
         group_idx = groups.index(trace.name)
         base_color = colors[group_idx]
@@ -427,13 +449,23 @@ def render_population_key(populations: list[str]):
     tints, as plain Streamlit HTML entirely OUTSIDE the Plotly figure --
     not part of its (auto-positioned) legend. This guarantees it can
     never overlap the plot area, unlike an in-figure legend, which can
-    crowd or overlap the chart on narrow viewports or with many entries."""
+    crowd or overlap the chart on narrow viewports or with many entries.
+
+    `populations` is deduplicated here, preserving canonical order --
+    callers typically pass results["population"].tolist() directly
+    (compare_n_groups/compare_populations_paired output has one row per
+    population x group-pair, so the same population repeats once per
+    pair), and without deduplication the key showed the same population
+    multiple times (and in whatever order those repeats happened to
+    appear), confirmed directly against a real 2-population/3-timepoint
+    comparison."""
+    seen = [p for p in POPULATIONS if p in populations]
     swatches = "".join(
         f"<span style='display:inline-flex; align-items:center; margin-right:14px;'>"
         f"<span style='display:inline-block; width:10px; height:10px; "
         f"border-radius:50%; background:{POP_COLORS[pop]}; margin-right:5px;'></span>"
         f"<span style='font-size:12px; color:#4B5563;'>{pop}</span></span>"
-        for pop in populations if pop in POP_COLORS
+        for pop in seen if pop in POP_COLORS
     )
     st.markdown(
         f"<div style='margin-top:6px; margin-bottom:2px;'>"
