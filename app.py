@@ -21,9 +21,11 @@ Run with:
     streamlit run app.py
 """
 from pathlib import Path
+import hashlib
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import sqlite3
 import streamlit as st
 
@@ -199,6 +201,18 @@ PLOTLY_CONFIG = {
     "displaylogo": False,
     "toImageButtonOptions": {"format": "png", "scale": 2},
 }
+
+
+def display_chart(fig, key: str):
+    """Mount a fresh chart when its displayed data or layout changes."""
+    # A Python figure check cannot detect a retained frontend figure.
+    # Key the surrounding container as well as the chart by its content
+    # so a new cohort cannot inherit the previous cohort's axes/traces.
+    revision = hashlib.sha256(fig.to_json().encode("utf-8")).hexdigest()[:16]
+    with st.container(key=f"{key}_frame_{revision}"):
+        st.plotly_chart(
+            fig, width="stretch", key=f"{key}_{revision}", config=PLOTLY_CONFIG,
+        )
 
 
 # ---------- connection + caching ----------
@@ -531,23 +545,30 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
             trace.marker.line.color = trace.marker.color
         fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
     else:
-        fig = px.bar(
-            chart_data, x="population", y=y_col, color=color_col,
-            # Each population has one bar. Grouping its color traces
-            # reserves empty side-by-side slots for the other populations.
-            color_discrete_map=color_map, barmode="overlay",
-            title=title, labels={y_col: y_label}, category_orders=category_orders,
-        )
+        # A single trace at consecutive numeric positions avoids both
+        # categorical-axis bookkeeping and empty slots between color
+        # traces. Names are explicit tick labels and hover data only.
+        chart_data = chart_data.set_index("population").loc[present_populations].reset_index()
+        positions = list(range(len(chart_data)))
+        labels = chart_data["population"].tolist()
+        fig = go.Figure(go.Bar(
+            x=positions, y=chart_data[y_col].tolist(), width=0.7,
+            marker=dict(
+                color=[color_map[population] for population in labels],
+                opacity=POPULATION_BACKGROUND_OPACITY,
+            ),
+            customdata=labels,
+            hovertemplate="population=%{customdata}<br>" + y_label + "=%{y}<extra></extra>",
+        ))
+        fig.update_layout(title=title, showlegend=False)
         fig.update_xaxes(
-            type="category", categoryorder="array", categoryarray=present_populations,
-            tickmode="array", tickvals=present_populations, ticktext=present_populations,
-            range=[-0.5, len(present_populations) - 0.5],
+            type="linear", title_text="population", tickmode="array",
+            tickvals=positions, ticktext=labels,
+            range=[-0.5, len(positions) - 0.5], autorange=False,
         )
-        fig.update_yaxes(gridcolor="#000000", gridwidth=0.5)
+        fig.update_yaxes(title_text=y_label, gridcolor="#000000", gridwidth=0.5)
         if yaxis_tickformat:
             fig.update_yaxes(tickformat=yaxis_tickformat)
-        fig.update_layout(showlegend=False)
-        fig.update_traces(marker_opacity=POPULATION_BACKGROUND_OPACITY)
     return fig
 
 
@@ -601,7 +622,7 @@ def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, 
         return
     for column, (fig, key) in zip(st.columns(len(charts)), charts):
         with column:
-            st.plotly_chart(fig, width='stretch', key=key)
+            display_chart(fig, key)
 
 
 def render_cohort_summary_block(df: pd.DataFrame):
@@ -1069,7 +1090,7 @@ with tab_default:
                 "against each other."
             )
             fig = render_single_population_boxplot(filtered)
-            st.plotly_chart(fig, width='stretch', key="default_boxplot", config=PLOTLY_CONFIG)
+            display_chart(fig, "default_boxplot")
 
 
 # ---------- Responder vs Non-responder ----------
@@ -1145,7 +1166,7 @@ with tab_resp:
                     filtered, results, group_order=["Responder", "Non-responder"],
                     group_colors=[RESPONSE_COLORS["Responder"], RESPONSE_COLORS["Non-responder"]],
                 )
-                st.plotly_chart(fig, width='stretch', key="resp_boxplot", config=PLOTLY_CONFIG)
+                display_chart(fig, "resp_boxplot")
                 render_population_key(results["population"].tolist())
 
             st.write("")
@@ -1216,7 +1237,7 @@ with tab_pop:
                 with st.container(border=True):
                     st.write("**Population distributions**")
                     fig = render_population_comparison_boxplot(filtered, selected_pops)
-                    st.plotly_chart(fig, width='stretch', key="pop_mode_boxplot", config=PLOTLY_CONFIG)
+                    display_chart(fig, "pop_mode_boxplot")
 
                 st.write("")
                 with st.container(border=True):
@@ -1312,7 +1333,7 @@ with tab_date:
                     fig = render_n_group_boxplot(
                         group_dfs, results, list(date_color_map.values()), x_label="timepoint",
                     )
-                    st.plotly_chart(fig, width='stretch', key="date_mode_boxplot", config=PLOTLY_CONFIG)
+                    display_chart(fig, "date_mode_boxplot")
                     render_population_key(results["population"].tolist())
 
                 st.write("")
@@ -1429,7 +1450,7 @@ with tab_custom:
             with st.container(border=True):
                 st.write("**Distribution comparison**")
                 fig = render_n_group_boxplot(cohort_dfs_by_label, results, colors_in_order, x_label="cohort")
-                st.plotly_chart(fig, width='stretch', key="custom_boxplot", config=PLOTLY_CONFIG)
+                display_chart(fig, "custom_boxplot")
                 render_population_key(results["population"].tolist())
 
             st.write("")
