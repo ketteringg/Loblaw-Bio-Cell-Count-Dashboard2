@@ -53,7 +53,7 @@ def add_clr_column(df: pd.DataFrame) -> pd.DataFrame:
     standard statistics are valid. clr_i = ln(count_i) - mean(ln(counts))
     for that sample.
 
-    Caveat, stated plainly: CLR is not a complete fix. The D=5
+    Caveat: CLR is not a complete fix. The D=5
     CLR-transformed values for a sample still sum to exactly zero by
     construction, so one linear dependency remains among them (unlike
     ILR, which uses D-1 orthonormal coordinates and removes the
@@ -66,9 +66,9 @@ def add_clr_column(df: pd.DataFrame) -> pd.DataFrame:
     directly on raw percentages.
 
     Requires every population's count to be > 0 for a given sample (true
-    throughout this dataset -- verified, minimum count is 1835, nowhere
-    near zero). If a future dataset has a zero count, log(0) is
-    undefined; rows for that sample get `clr = NaN` rather than raising,
+    throughout this dataset; the minimum observed count is 1835). If a
+    future dataset has a zero count, log(0) is undefined; rows for that
+    sample get `clr = NaN` rather than raising,
     so callers relying on `clr` should be aware a sample could silently
     drop out of a CLR-based test if this prerequisite is ever violated.
     """
@@ -94,8 +94,7 @@ def check_group_balance(df: pd.DataFrame, group_col: str, stratify_col: str) -> 
     a future version of the data has different projects, more of them,
     or an actual imbalance, this recomputes against whatever is loaded
     and reflects that, rather than reporting a stale historical finding
-    about the current dataset. This is what makes a confounder check
-    "valid for other datasets": the check is code, not a documented fact.
+    about the current dataset.
 
     Returns a dict with:
       contingency_table -- the raw counts (subject-level, deduplicated)
@@ -177,9 +176,8 @@ def run_stats_test(comparison_df: pd.DataFrame) -> pd.DataFrame:
     mask apparent significance as a result. Reported medians below are
     still percentages, since that's the natural, interpretable unit for
     describing composition -- only the significance test itself uses CLR.
-    See README for the empirical comparison: testing on raw percentages
-    instead reports monocyte as significant too; it doesn't survive the
-    CLR-based test.
+    See the README's "Statistical approach" section for the empirical
+    raw-percentage vs CLR comparison on this cohort.
 
     Takes the already-fetched comparison DataFrame (pure computation,
     no DB access) so it stays independently testable.
@@ -404,16 +402,9 @@ def get_population_averages(df: pd.DataFrame, split_by_response: bool = False) -
 
     out = (
         # observed=True: without it, a groupby on a Categorical column
-        # with unused categories (e.g. population narrowed to just 2 of
-        # 5 via an upstream filter) can silently manufacture zero-sample
-        # rows for the categories that aren't actually present. Every
-        # downstream consumer of this table's .unique() already handles
-        # that correctly on its own (verified directly, including this
-        # exact split_by_response=True + narrowed-population combination),
-        # but there's no reason to leave a known pandas footgun sitting
-        # in the data layer just because nothing currently trips it --
-        # especially in a codebase that has already hit several real
-        # variations of "phantom category shows up somewhere it shouldn't".
+        # with unused categories (e.g. population narrowed to 2 of 5 via
+        # an upstream filter) can silently manufacture zero-sample rows
+        # for categories that aren't actually present.
         working.groupby(group_cols, observed=True)
         .agg(
             avg_count=("count", "mean"),
@@ -426,19 +417,11 @@ def get_population_averages(df: pd.DataFrame, split_by_response: bool = False) -
     out["avg_percentage"] = out["avg_percentage"].round(2)
 
     # Sorted by explicit rank rather than by making these columns
-    # pd.Categorical: a Categorical here would round-trip right back into
-    # the same "column claims to have levels that aren't actually in the
-    # data" shape this function just avoided by grouping with
-    # observed=True. Both population and response_label get their own
-    # rank map -- response_label specifically must NOT be left to
+    # pd.Categorical (a Categorical would reintroduce the unused-levels
+    # shape observed=True just avoided). Both population and
+    # response_label get their own rank map: response_label must not
     # fall back to a plain alphabetical sort, which would put
-    # "Non-responder" before "Responder" (N < R). That's not a
-    # hypothetical: an earlier version of this function did exactly that
-    # by only rank-mapping population and leaving response_label
-    # unmapped, silently reintroducing a response-ordering bug that had
-    # already been found and fixed once, contradicting every other
-    # Responder/Non-responder view in the dashboard. Confirmed directly
-    # against that exact version before writing this comment.
+    # "Non-responder" before "Responder" (N < R).
     out["population"] = out["population"].astype(str)
     population_rank = {population: rank for rank, population in enumerate(POPULATIONS)}
     response_rank = {"Responder": 0, "Non-responder": 1}
@@ -702,13 +685,13 @@ def get_baseline_summary(conn: sqlite3.Connection) -> dict:
     }
 
 
-# ---------- Bonus: graded form question ----------
+# ---------- Supplementary assignment question ----------
 
 def get_avg_b_cells_melanoma_male_responders(conn: sqlite3.Connection) -> float:
     """
     Avg B cell count for melanoma males, responders, time=0, across ALL
     sample types and treatments (deliberately broader than Part 4's
-    PBMC/miraclib-only cohort -- matches the form question's scope exactly).
+    PBMC/miraclib-only cohort, matching the question's stated scope).
     Uses raw cell count, not percentage ("number of B cells").
     """
     query = """
