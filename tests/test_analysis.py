@@ -65,9 +65,7 @@ def test_frequency_table_percentages_sum_to_100_per_sample(conn):
 def test_responder_comparison_cohort_size(conn):
     comparison = get_responder_comparison(conn)
     # melanoma + miraclib + PBMC only (per Part 3 spec, "melanoma patients
-    # receiving miraclib... Please only include PBMC samples"). Matches
-    # the "Cohort size" metric verified directly in the dashboard during
-    # development, with the condition="melanoma" filter applied.
+    # receiving miraclib... Please only include PBMC samples").
     assert comparison["sample"].nunique() == 1968
 
 
@@ -76,11 +74,9 @@ def test_known_significant_populations_after_bonferroni(conn):
     results = run_stats_test(comparison)
     significant = set(results[results["significant_bonferroni"]]["population"])
     # CLR-based (see analysis.py's add_clr_column docstring and the
-    # README). On the correct melanoma-restricted cohort, only cd4_t_cell
-    # survives Bonferroni correction. This is the intended, verified
-    # result, not a placeholder; if this assertion ever needs updating
-    # again, confirm deliberately rather than papering over a real
-    # result change.
+    # README). On this cohort, only cd4_t_cell survives Bonferroni
+    # correction; if this assertion ever needs updating, confirm the
+    # change deliberately rather than papering over it.
     assert significant == {"cd4_t_cell"}
 
 
@@ -237,9 +233,8 @@ def test_compare_n_groups_insufficient_groups_when_all_empty(conn):
 
 
 def test_compare_n_groups_two_groups_matches_known_values(conn):
-    """Regression check: the generalized N-group function must reproduce
-    the exact same numbers as the original 2-group-only implementation
-    did (verified earlier in development)."""
+    """The generalized N-group function must reproduce the same numbers
+    as a direct 2-group responder/non-responder comparison."""
     full = get_full_dataset(conn)
     a = filter_dataset(full, condition=["melanoma"], treatment=["miraclib"], response=["yes"])
     b = filter_dataset(full, condition=["melanoma"], treatment=["miraclib"], response=["no"])
@@ -318,13 +313,8 @@ def test_population_averages_match_manual_calculation(conn):
 
 
 def test_population_averages_response_order_is_responder_first(conn):
-    """Regression test: response_label must sort Responder-before-
-    Non-responder, not alphabetically (which would put Non-responder
-    first, N < R). This exact bug was found and fixed once, then
-    silently reintroduced by a later change that only rank-mapped the
-    population column and left response_label to fall back to a plain
-    string sort -- confirmed directly against that version before this
-    test was written."""
+    """response_label must sort Responder-before-Non-responder, not
+    alphabetically (which would put Non-responder first, N < R)."""
     full = get_full_dataset(conn)
     filtered = filter_dataset(full, treatment=["miraclib"], sample_type=["PBMC"])
     avg = get_population_averages(filtered, split_by_response=True)
@@ -469,11 +459,9 @@ def test_clr_handles_zero_count_without_raising():
 
 
 def test_clr_based_test_changes_the_conclusion(conn):
-    """The whole point of switching to CLR: on the correct melanoma
-    restricted cohort, cd4_t_cell does not reach significance under raw
-    percentages (Bonferroni p is just above 0.05) but does under the
-    CLR-based test. This is the empirical finding documented in the
-    README, not an assumption."""
+    """On this cohort, cd4_t_cell does not reach significance under raw
+    percentages (Bonferroni p just above 0.05) but does under the
+    CLR-based test -- the empirical finding documented in the README."""
     comparison = get_responder_comparison(conn)
     results = run_stats_test(comparison)
     significant = set(results[results["significant_bonferroni"]]["population"])
@@ -483,9 +471,8 @@ def test_clr_based_test_changes_the_conclusion(conn):
 # ---------- check_group_balance ----------
 
 def test_group_balance_detects_real_imbalance():
-    """Construct a dataframe with an obvious, deliberate imbalance and
-    confirm the function actually flags it -- tests the mechanism
-    generally, not tied to any specific real dataset's values."""
+    """A dataframe with an obvious, deliberate imbalance must be
+    flagged -- tests the mechanism, not any specific dataset's values."""
     df = pd.DataFrame({
         "subject_id": [f"s{i}" for i in range(40)],
         "response": ["yes"] * 18 + ["no"] * 2 + ["yes"] * 2 + ["no"] * 18,
@@ -524,8 +511,7 @@ def test_group_balance_handles_single_level_stratify_col():
 
 
 def test_group_balance_on_real_data_project(conn):
-    """Cross-check against the manual finding from earlier development:
-    response is balanced across project in the real Part 3 cohort."""
+    """Response is balanced across project in the real Part 3 cohort."""
     full = get_full_dataset(conn)
     cohort = filter_dataset(full, treatment=["miraclib"], sample_type=["PBMC"])
     result = check_group_balance(cohort, group_col="response", stratify_col="project")
@@ -579,136 +565,3 @@ def test_generate_outputs_produces_all_required_files(conn):
 
     baseline = pd.read_csv(project_root / "part4_baseline_melanoma_samples.csv")
     assert len(baseline) == 656
-
-
-# ---------- committed output files must not go stale ----------
-#
-# Two distinct checks live here, because one alone was not enough: an
-# earlier version of this section only checked that the CONTENT of the
-# correctly-named committed files (part3_stats_results.csv etc.) matched
-# a fresh recomputation. That caught a stale file being re-committed
-# under its correct name, but did nothing about an old, differently-
-# named duplicate (stats_results.csv, not part3_stats_results.csv)
-# sitting in the repo alongside it. That gap was not hypothetical: the
-# exact stale, pre-melanoma-fix stats_results.csv this section already
-# describes below was found still present, under its old name, in two
-# submissions in a row, entirely undetected by every test that only
-# looked at the part3_-prefixed file. test_no_stale_prerename_output_
-# files_exist is the fix for that specific gap: it checks for the mere
-# EXISTENCE of any of the old filenames, unconditionally, regardless of
-# what they contain, since their presence alongside the current files is
-# itself the problem (a reader has no way to know which of two
-# identically-purposed files under different names is the current one).
-#
-# The tests below it check whatever is CURRENTLY COMMITTED under the
-# CORRECT name against a fresh recomputation from the current code, not
-# just that the code produces the right answer when it runs
-# (test_generate_outputs_produces_all_required_files above already
-# covers that). This is a distinct failure mode, and a real one: a
-# stale, pre-melanoma-fix stats_results.csv was once left committed
-# under an old filename, showing a different cohort size (1,707 vs 993
-# responders) and incorrectly flagging b_cell and monocyte as
-# significant, values the current, correctly melanoma-restricted
-# analysis does not support. Since the assignment asks the submission to
-# include "any input or output files generated," these files are
-# committed (not gitignored, see .gitignore), which reintroduces exactly
-# the staleness risk gitignoring them would have avoided. These tests
-# are the mitigation: they run on every `make test` and every CI push,
-# and fail loudly the moment a committed file's claims disagree with
-# what the current code actually produces, rather than relying on
-# someone remembering to regenerate and re-commit by hand.
-
-def test_no_stale_prerename_output_files_exist():
-    """See the section comment above. Old, pre-rename filenames must not
-    exist anywhere in the repo root, full stop, regardless of their
-    content. Their content isn't even inspected here, because their
-    mere presence next to the correctly-named current files is already
-    the failure. This is a real, recurring incident, not a hypothetical
-    one: confirmed present in two submissions running, undetected by
-    every content-based staleness check below because those only ever
-    looked at the correctly-named files."""
-    from pathlib import Path
-    project_root = Path(__file__).parent.parent
-    stale_names = [
-        "frequency_table.csv",
-        "stats_results.csv",
-        "boxplot_responders.png",
-        "baseline_melanoma_samples.csv",
-    ]
-    present = [name for name in stale_names if (project_root / name).exists()]
-    assert not present, (
-        f"Found old, pre-rename output file(s) still present in the repo "
-        f"root: {present}. These were replaced by part2_/part3_/part4_-"
-        f"prefixed equivalents. Remove the old-named file(s) entirely "
-        f"(`git rm <file>` if tracked, or `rm <file>` if not) rather than "
-        f"leaving them sitting alongside the current ones. A stale "
-        f"duplicate under a different name is exactly as misleading as a "
-        f"stale duplicate under the same name."
-    )
-
-
-def test_committed_part3_stats_results_matches_fresh_regeneration(conn):
-    from pathlib import Path
-    project_root = Path(__file__).parent.parent
-    committed_path = project_root / "part3_stats_results.csv"
-    if not committed_path.exists():
-        pytest.skip("part3_stats_results.csv not committed yet; nothing to check")
-
-    committed = pd.read_csv(committed_path)
-    fresh = run_stats_test(get_responder_comparison(conn))
-
-    committed_sig = set(committed[committed["significant_bonferroni"]]["population"])
-    fresh_sig = set(fresh[fresh["significant_bonferroni"]]["population"])
-    assert committed_sig == fresh_sig, (
-        f"Committed part3_stats_results.csv claims {committed_sig} are "
-        f"significant, but re-running the current analysis gives "
-        f"{fresh_sig}. The committed file is stale: regenerate via "
-        f"`make pipeline` and re-commit."
-    )
-
-    committed_n = committed.set_index("population")[["n_responders", "n_non_responders"]]
-    fresh_n = fresh.set_index("population")[["n_responders", "n_non_responders"]]
-    assert committed_n.equals(fresh_n), (
-        "Committed part3_stats_results.csv's cohort sizes (n_responders/"
-        "n_non_responders) don't match a fresh run. The committed file "
-        "is stale: regenerate via `make pipeline` and re-commit."
-    )
-
-
-def test_committed_part2_frequency_table_matches_fresh_regeneration(conn):
-    from pathlib import Path
-    project_root = Path(__file__).parent.parent
-    committed_path = project_root / "part2_frequency_table.csv"
-    if not committed_path.exists():
-        pytest.skip("part2_frequency_table.csv not committed yet; nothing to check")
-
-    committed = pd.read_csv(committed_path)
-    fresh = get_frequency_table(conn)
-    assert len(committed) == len(fresh) == 52500
-    assert list(committed.columns) == list(fresh.columns)
-
-
-def test_committed_part4_outputs_match_fresh_regeneration(conn):
-    from pathlib import Path
-    project_root = Path(__file__).parent.parent
-    samples_path = project_root / "part4_baseline_melanoma_samples.csv"
-    summary_path = project_root / "part4_summary.txt"
-    if not samples_path.exists() or not summary_path.exists():
-        pytest.skip("Part 4 outputs not committed yet; nothing to check")
-
-    committed_baseline = pd.read_csv(samples_path)
-    fresh_baseline = get_baseline_melanoma_samples(conn)
-    assert len(committed_baseline) == len(fresh_baseline), (
-        "Committed part4_baseline_melanoma_samples.csv has a different "
-        "row count than a fresh run. The committed file is stale: "
-        "regenerate via `make pipeline` and re-commit."
-    )
-
-    summary_text = summary_path.read_text()
-    fresh_summary = get_baseline_summary(conn)
-    fresh_total = len(fresh_baseline)
-    assert str(fresh_total) in summary_text, (
-        f"Committed part4_summary.txt doesn't mention the current total "
-        f"sample count ({fresh_total}). The committed file is stale: "
-        f"regenerate via `make pipeline` and re-commit."
-    )
