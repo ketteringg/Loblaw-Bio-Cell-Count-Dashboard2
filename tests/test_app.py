@@ -233,3 +233,64 @@ def test_all_tabs_render_simultaneously(app):
     assert any("Confounder check" in e.label for e in app.expander)
     labels = [m.label for m in app.metric]
     assert any("Cohort A" in l for l in labels)
+
+
+# ---------- Stats table significance-sort toggle ----------
+
+def test_stats_table_significance_toggle_present_and_default_off(app):
+    """Every comparison tab's stats table should offer the toggle,
+    defaulting to grouped-by-cell-type (off) rather than
+    significance-sorted."""
+    for key in ["resp_stats_sig_sort", "pop_mode_stats_sig_sort", "date_mode_stats_sig_sort", "custom_stats_sig_sort"]:
+        cb = next((c for c in app.checkbox if c.key == key), None)
+        assert cb is not None, f"missing checkbox: {key}"
+        assert cb.value is False
+
+
+def test_stats_table_significance_toggle_switches_order_without_exceptions(app):
+    cb = next(c for c in app.checkbox if c.key == "resp_stats_sig_sort")
+    cb.set_value(True)
+    app.run(timeout=30)
+    assert not app.exception
+
+
+# ---------- Average-count chart: independent y-axis per population ----------
+
+def test_comparison_avg_chart_uses_faceted_independent_axes(ensure_db):
+    """Regression test for a real bug: the average-count bar chart shared
+    one y-axis across all 5 populations, so real per-group differences
+    within a population (e.g. ~1-2% day-to-day change) were invisible
+    next to the much larger between-population spread (~10k to ~30k
+    cells). Verifies the fix directly on a reconstructed figure: facet
+    y-axes must NOT be linked (matches=None) when comparing groups.
+    Deliberately doesn't `import app` -- that would execute the whole
+    Streamlit script body as a side effect (title, tabs, queries, the
+    works), which is slow and fragile for what's really just a Plotly
+    figure-construction check."""
+    import sqlite3
+    import pandas as pd
+    import plotly.express as px
+    from analysis import get_full_dataset, filter_dataset, get_population_averages, POPULATIONS
+
+    conn = sqlite3.connect(ensure_db)
+    conn.execute("PRAGMA foreign_keys = ON")
+    full = get_full_dataset(conn)
+    filtered = filter_dataset(full, treatment=["miraclib"], sample_type=["PBMC"])
+    group_dfs = {
+        f"Day {t}": filter_dataset(filtered, time_from_treatment_start=[t])
+        for t in [0, 7, 14]
+    }
+    avg_frames = [get_population_averages(df).assign(timepoint=label) for label, df in group_dfs.items()]
+    avg_combined = pd.concat(avg_frames, ignore_index=True)
+
+    fig = px.bar(
+        avg_combined, x="timepoint", y="avg_count", color="timepoint",
+        facet_col="population", facet_col_wrap=5,
+        category_orders={"population": POPULATIONS},
+    )
+    fig.update_yaxes(matches=None)
+
+    y_axes = [k for k in fig.layout if k.startswith("yaxis")]
+    assert len(y_axes) == 5
+    for axis_name in y_axes:
+        assert fig.layout[axis_name].matches is None
