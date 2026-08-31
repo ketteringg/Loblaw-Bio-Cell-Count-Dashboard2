@@ -8,8 +8,8 @@ __pycache__/
 venv/
 env/
 
-# Streamlit local cache/logs (NOT .streamlit/config.toml -- that's the
-# project's theme file and should be committed)
+# Streamlit local cache/logs. Not .streamlit/config.toml, which is the
+# project's theme file and should be committed.
 .streamlit/secrets.toml
 
 # OS-specific
@@ -31,11 +31,11 @@ htmlcov/
 # derived file can silently drift out of sync with the source CSV or
 # code if either changes without someone remembering to regenerate and
 # re-commit it. If any of these already exist in the repo's git history,
-# `git rm --cached <file>` once to actually untrack them -- adding a
-# .gitignore entry alone doesn't retroactively remove a tracked file.
+# run `git rm --cached <file>` once to actually untrack them. Adding a
+# .gitignore entry alone does not retroactively remove a tracked file.
 cell_counts.db
-frequency_table.csv
-stats_results.csv
-boxplot_responders.png
-baseline_melanoma_samples.csv
+part2_frequency_table.csv
+part3_stats_results.csv
+part3_boxplot_responders.png
+part4_baseline_melanoma_samples.csv
 part4_summary.txt
