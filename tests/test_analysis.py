@@ -569,3 +569,91 @@ def test_generate_outputs_produces_all_required_files(conn):
 
     baseline = pd.read_csv(project_root / "part4_baseline_melanoma_samples.csv")
     assert len(baseline) == 656
+
+
+# ---------- committed output files must not go stale ----------
+#
+# These check whatever is CURRENTLY COMMITTED in the repo against a
+# fresh recomputation from the current code, not just that the code
+# produces the right answer when it runs (test_generate_outputs_
+# produces_all_required_files above already covers that). This is a
+# distinct failure mode, and a real one: a stale, pre-melanoma-fix
+# stats_results.csv was once left committed under an old filename
+# (stats_results.csv rather than part3_stats_results.csv), showing a
+# different cohort size (1,707 vs 993 responders) and incorrectly
+# flagging b_cell and monocyte as significant, values the current,
+# correctly melanoma-restricted analysis does not support. Since the
+# assignment asks the submission to include "any input or output files
+# generated," these files are committed (not gitignored, see
+# .gitignore), which reintroduces exactly the staleness risk gitignoring
+# them would have avoided. These tests are the mitigation: they run on
+# every `make test` and every CI push, and fail loudly the moment a
+# committed file's claims disagree with what the current code actually
+# produces, rather than relying on someone remembering to regenerate and
+# re-commit by hand.
+
+def test_committed_part3_stats_results_matches_fresh_regeneration(conn):
+    from pathlib import Path
+    project_root = Path(__file__).parent.parent
+    committed_path = project_root / "part3_stats_results.csv"
+    if not committed_path.exists():
+        pytest.skip("part3_stats_results.csv not committed yet; nothing to check")
+
+    committed = pd.read_csv(committed_path)
+    fresh = run_stats_test(get_responder_comparison(conn))
+
+    committed_sig = set(committed[committed["significant_bonferroni"]]["population"])
+    fresh_sig = set(fresh[fresh["significant_bonferroni"]]["population"])
+    assert committed_sig == fresh_sig, (
+        f"Committed part3_stats_results.csv claims {committed_sig} are "
+        f"significant, but re-running the current analysis gives "
+        f"{fresh_sig}. The committed file is stale: regenerate via "
+        f"`make pipeline` and re-commit."
+    )
+
+    committed_n = committed.set_index("population")[["n_responders", "n_non_responders"]]
+    fresh_n = fresh.set_index("population")[["n_responders", "n_non_responders"]]
+    assert committed_n.equals(fresh_n), (
+        "Committed part3_stats_results.csv's cohort sizes (n_responders/"
+        "n_non_responders) don't match a fresh run. The committed file "
+        "is stale: regenerate via `make pipeline` and re-commit."
+    )
+
+
+def test_committed_part2_frequency_table_matches_fresh_regeneration(conn):
+    from pathlib import Path
+    project_root = Path(__file__).parent.parent
+    committed_path = project_root / "part2_frequency_table.csv"
+    if not committed_path.exists():
+        pytest.skip("part2_frequency_table.csv not committed yet; nothing to check")
+
+    committed = pd.read_csv(committed_path)
+    fresh = get_frequency_table(conn)
+    assert len(committed) == len(fresh) == 52500
+    assert list(committed.columns) == list(fresh.columns)
+
+
+def test_committed_part4_outputs_match_fresh_regeneration(conn):
+    from pathlib import Path
+    project_root = Path(__file__).parent.parent
+    samples_path = project_root / "part4_baseline_melanoma_samples.csv"
+    summary_path = project_root / "part4_summary.txt"
+    if not samples_path.exists() or not summary_path.exists():
+        pytest.skip("Part 4 outputs not committed yet; nothing to check")
+
+    committed_baseline = pd.read_csv(samples_path)
+    fresh_baseline = get_baseline_melanoma_samples(conn)
+    assert len(committed_baseline) == len(fresh_baseline), (
+        "Committed part4_baseline_melanoma_samples.csv has a different "
+        "row count than a fresh run. The committed file is stale: "
+        "regenerate via `make pipeline` and re-commit."
+    )
+
+    summary_text = summary_path.read_text()
+    fresh_summary = get_baseline_summary(conn)
+    fresh_total = len(fresh_baseline)
+    assert str(fresh_total) in summary_text, (
+        f"Committed part4_summary.txt doesn't mention the current total "
+        f"sample count ({fresh_total}). The committed file is stale: "
+        f"regenerate via `make pipeline` and re-commit."
+    )
