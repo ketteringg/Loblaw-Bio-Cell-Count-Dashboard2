@@ -538,7 +538,11 @@ def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, 
     "Responder" here (while the distribution boxplot elsewhere used an
     explicit Responder-first order) -- a real inconsistency, not a
     stylistic choice, caught by comparing the two side by side."""
-    category_orders = {"population": POPULATIONS}
+    # Keep canonical ordering without reserving axis categories or facets
+    # for populations excluded by the cohort filters (including gaps
+    # between selected populations, such as b_cell + cd4_t_cell).
+    present_populations = [p for p in POPULATIONS if p in avg_table["population"].unique()]
+    category_orders = {"population": present_populations}
     if group_order:
         category_orders[color_col] = group_order
     is_comparison = color_col != "population"
