@@ -413,13 +413,16 @@ def get_population_averages(df: pd.DataFrame, split_by_response: bool = False) -
     out["avg_count"] = out["avg_count"].round(2)
     out["avg_percentage"] = out["avg_percentage"].round(2)
 
-    # Keep population in the canonical b_cell/cd8/cd4/nk/monocyte order
-    # rather than whatever order groupby happens to produce.
-    out["population"] = pd.Categorical(
-        out["population"], categories=POPULATIONS, ordered=True,
-    ).remove_unused_categories()
+    # The global population order is a sorting rule, not a chart domain.
+    # Return plain labels with a fresh row index: b_cell + monocyte must
+    # occupy two adjacent positions, never categorical codes 0 and 4.
+    out["population"] = out["population"].astype(str)
+    population_rank = {population: rank for rank, population in enumerate(POPULATIONS)}
     sort_cols = ["population", "response_label"] if split_by_response else ["population"]
-    return out.sort_values(sort_cols).reset_index(drop=True)
+    return out.sort_values(
+        sort_cols,
+        key=lambda column: column.map(population_rank) if column.name == "population" else column,
+    ).reset_index(drop=True)
 
 
 def get_cohort_summary(df: pd.DataFrame) -> dict:
