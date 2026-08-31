@@ -387,12 +387,10 @@ before B) is pinned explicitly throughout rather than left to
 alphabetical or click-order sorting.
 
 The comparison bar charts facet by population on a shared y-axis, so
-between-population scale differences (e.g. `b_cell` ~10k vs `cd4_t_cell`
-~30k) read directly from bar heights and gridlines align across facets.
-Within-population differences between comparison groups are often under
-2%, too small to read from zero-based bars at any scale; the average
-table and the stats table are the place to read those, and the
-distribution boxplot shows them at higher resolution.
+between-population scale differences read directly from bar heights;
+differences between groups *within* a population are usually small and
+are easier to read from the averages table, the stats table, and the
+distribution boxplot.
 
 **These results are exploratory, not confirmatory.** The comparison tabs
 let you re-slice the cohort and re-run the same test machinery in
