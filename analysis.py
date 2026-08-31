@@ -142,8 +142,10 @@ def get_frequency_table(conn: sqlite3.Connection) -> pd.DataFrame:
 
 def get_responder_comparison(conn: sqlite3.Connection) -> pd.DataFrame:
     """
-    Frequency table restricted to miraclib-treated, PBMC samples, with
-    subject-level response attached -- the exact cohort Part 3 asks for.
+    Frequency table restricted to melanoma, miraclib-treated, PBMC
+    samples, with subject-level response attached. This is the exact
+    cohort Part 3 asks for ("melanoma patients receiving miraclib...
+    Please only include PBMC samples").
     """
     query = """
         SELECT s.sample_id AS sample, c.population, c.count,
@@ -152,6 +154,7 @@ def get_responder_comparison(conn: sqlite3.Connection) -> pd.DataFrame:
         JOIN cell_counts c ON s.sample_id = c.sample_id
         JOIN subjects sub ON s.subject_id = sub.subject_id
         WHERE sub.treatment = 'miraclib' AND s.sample_type = 'PBMC'
+          AND sub.condition = 'melanoma'
     """
     df = pd.read_sql(query, conn)
 
