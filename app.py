@@ -201,6 +201,7 @@ PLOTLY_CONFIG = {
     "displaylogo": False,
     "toImageButtonOptions": {"format": "png", "scale": 2},
 }
+CHART_LAYOUT_VERSION = "compact-populations-v4"
 
 
 def display_chart(fig, key: str):
@@ -208,7 +209,8 @@ def display_chart(fig, key: str):
     # A Python figure check cannot detect a retained frontend figure.
     # Key the surrounding container as well as the chart by its content
     # so a new cohort cannot inherit the previous cohort's axes/traces.
-    revision = hashlib.sha256(fig.to_json().encode("utf-8")).hexdigest()[:16]
+    content_hash = hashlib.sha256(fig.to_json().encode("utf-8")).hexdigest()[:16]
+    revision = f"{CHART_LAYOUT_VERSION}_{content_hash}"
     with st.container(key=f"{key}_frame_{revision}"):
         st.plotly_chart(
             fig, width="stretch", key=f"{key}_{revision}", config=PLOTLY_CONFIG,
@@ -1027,6 +1029,7 @@ st.sidebar.write(f"{full['subject_id'].nunique():,} subjects")
 st.sidebar.write(f"{full['sample'].nunique():,} samples")
 st.sidebar.write(f"{full['project'].nunique()} projects")
 st.sidebar.write(f"{len(POPULATIONS)} cell populations tracked")
+st.sidebar.caption(f"Chart layout: {CHART_LAYOUT_VERSION}")
 
 # ---------- header ----------
 st.title("Loblaw Bio")
