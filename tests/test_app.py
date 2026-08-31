@@ -294,3 +294,39 @@ def test_comparison_avg_chart_uses_faceted_independent_axes(ensure_db):
     assert len(y_axes) == 5
     for axis_name in y_axes:
         assert fig.layout[axis_name].matches is None
+
+
+# ---------- Boxplot facets: only present populations, not all 5 ----------
+
+def test_boxplot_only_facets_present_populations(app):
+    """Regression test for a real bug: filtering a comparison cohort down
+    to a subset of populations (e.g. just b_cell + cd4_t_cell) used to
+    still create 5 facets (Plotly Express creates one facet per
+    category_orders entry, even with zero matching rows), leaving 3 empty
+    facets with Plotly's raw unprocessed "population=X" title text, and
+    -- worse -- misaligning every later facet-indexed label (background
+    tint, group names, axis title) onto the wrong facet whenever an empty
+    facet was interspersed before a present one. Confirmed directly
+    against the real dashboard: filtering By Date to WB + b_cell +
+    cd4_t_cell should show exactly those 2 populations in the facet key,
+    not all 5."""
+    app.multiselect(key="date_mode_sample_type").select("WB")
+    app.run(timeout=30)
+    app.multiselect(key="date_mode_population").select("b_cell")
+    app.run(timeout=30)
+    app.multiselect(key="date_mode_population").select("cd4_t_cell")
+    app.run(timeout=30)
+
+    assert not app.exception
+    assert app.multiselect(key="date_mode_population").value == ["b_cell", "cd4_t_cell"]
+
+    # 3 tabs render a population key (Responder, By Date, Custom); By
+    # Date's is the only one filtered, so it's the only one that should
+    # show exactly 2 populations rather than all 5.
+    import re
+    keys = [m.value for m in app.markdown if "Facet background" in m.value]
+    assert len(keys) == 3
+    parsed = [re.findall(r"color:#4B5563;'>(\w+)<", k) for k in keys]
+    filtered_keys = [p for p in parsed if len(p) == 2]
+    assert len(filtered_keys) == 1
+    assert filtered_keys[0] == ["b_cell", "cd4_t_cell"]
