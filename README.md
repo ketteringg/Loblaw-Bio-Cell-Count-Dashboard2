@@ -15,7 +15,7 @@ Quickstart below.
 
 ```bash
 make setup       # pip install -r requirements.txt
-make pipeline    # python load_data.py -- builds cell_counts.db from cell-count.csv
+make pipeline    # builds cell_counts.db, then generates every Part 2-4 output file/plot
 make dashboard   # streamlit run app.py -- launches the interactive dashboard
 make test        # pip install -r requirements-dev.txt && pytest -v
 ```
@@ -25,13 +25,17 @@ Equivalent plain commands, if you'd rather not use `make`:
 ```bash
 pip install -r requirements.txt
 python load_data.py
+python generate_outputs.py
 streamlit run app.py
 ```
 
-`load_data.py` (`make pipeline`) builds `cell_counts.db` from
-`cell-count.csv` ahead of time, which is the normal local workflow. You
-don't strictly have to run it first, though: `app.py` self-initializes the
-database on its own if it's missing (see "Self-initializing database"
+`make pipeline` runs `load_data.py` (builds `cell_counts.db` from
+`cell-count.csv`) followed by `generate_outputs.py` (writes
+`frequency_table.csv`, `stats_results.csv`, `boxplot_responders.png`,
+`baseline_melanoma_samples.csv`, and `part4_summary.txt` -- see
+"Repository contents" below for what each one is). You don't strictly have
+to run either first before the dashboard, though: `app.py` self-initializes
+the database on its own if it's missing (see "Self-initializing database"
 below), which is what makes the Streamlit Community Cloud deployment work
 without a separate setup step.
 
@@ -59,7 +63,7 @@ make test
 ```
 
 runs the full test suite (`tests/test_analysis.py` and `tests/test_app.py`,
-68 tests as of writing) via `pytest`. This also runs automatically on every
+78 tests as of writing) via `pytest`. This also runs automatically on every
 push and pull request via GitHub Actions (`.github/workflows/tests.yml`) --
 check the "Actions" tab on the repo, or the checkmark next to any commit,
 to see the result without running anything locally.
@@ -80,21 +84,53 @@ mode, mode switching). These are the same checks that were run manually
 throughout development -- more than one caught a real bug before it
 shipped -- now made permanent.
 
+## Code structure and why
+
+Three layers, each with one job:
+
+- **`load_data.py`** owns getting the raw CSV into a validated, relational
+  form. It's the only place that touches `cell-count.csv` directly or knows
+  the wide-format-to-long-format conversion. Nothing downstream re-reads the
+  CSV.
+- **`analysis.py`** owns every query and statistical computation, and knows
+  nothing about Streamlit or the dashboard. It's plain functions that take a
+  connection or a DataFrame and return a DataFrame -- this is what makes it
+  possible to unit-test the actual statistics (`tests/test_analysis.py`)
+  without spinning up the UI, and what `generate_outputs.py` calls directly
+  to produce the graded Part 2-4 files without going through the dashboard
+  at all.
+- **`app.py`** owns presentation only: it calls `analysis.py` functions and
+  renders the results. It's deliberately general-purpose (any cohort, any
+  comparison, via filters) rather than having one fixed view per assignment
+  part, because Parts 2-4 turn out to be special cases of "filter a cohort,
+  then optionally compare groups within it" -- the thing the dashboard
+  already does for anything.
+
+That separation is also why there's a **`generate_outputs.py`**, distinct
+from the dashboard: the assignment's outputs need to exist as concrete
+files a grader can open without clicking through the UI to reconstruct the
+exact required filter combination, so this script calls the same
+`analysis.py` functions directly and writes them to disk. Both `app.py` and
+`generate_outputs.py` are two different callers of the same underlying
+logic, not two separately-maintained copies of it -- a change to
+`analysis.py`'s statistics changes both consistently.
+
 ## Repository contents
 
 | File | Purpose |
 |---|---|
-| `Makefile` | `make setup` / `make pipeline` / `make dashboard` / `make test` -- thin wrappers around the commands above |
+| `Makefile` | `make setup` / `make pipeline` / `make dashboard` / `make test` -- `pipeline` builds the database and generates every required Part 2-4 output file/plot, in that order, with no manual steps in between |
 | `.streamlit/config.toml` | Dashboard theme (colors, font) |
 | `.github/workflows/tests.yml` | Runs the test suite on every push/PR |
-| `.gitignore` | Standard Python/venv/editor ignores |
+| `.gitignore` | Editor/OS/venv ignores, plus every file `make pipeline` generates (see below) |
 | `schema.sql` | Relational schema (3 tables) |
 | `load_data.py` | Validates `cell-count.csv`, builds `cell_counts.db` |
 | `analysis.py` | Query + analysis functions (framework-agnostic, no Streamlit) |
-| `app.py` | Streamlit dashboard: single page, mode-selector driven exploration and comparison |
+| `generate_outputs.py` | Produces the required Part 2-4 files/plot by calling `analysis.py` directly (see "Code structure and why" above) |
+| `app.py` | Streamlit dashboard: 5 tabs, single-cohort exploration plus 4 comparison modes |
 | `tests/` | pytest suite (`test_analysis.py`, `test_app.py`, `conftest.py`) |
 | `cell-count.csv` | Source data |
-| `cell_counts.db` | Generated by `load_data.py` / `make pipeline` -- **not committed** (gitignored; always rebuilt from `cell-count.csv`, so it can't silently drift out of sync with the source data or code) |
+| `cell_counts.db`, `frequency_table.csv`, `stats_results.csv`, `boxplot_responders.png`, `baseline_melanoma_samples.csv`, `part4_summary.txt` | All generated by `make pipeline` -- **none of these are committed** (gitignored; always rebuilt from `cell-count.csv` + the current code, so a committed copy can never silently drift out of sync with either) |
 | `requirements.txt` | Pinned runtime dependencies |
 | `requirements-dev.txt` | Runtime dependencies plus `pytest` |
 
@@ -212,6 +248,45 @@ cell_counts (sample_id FK, population, count)  -- composite PK (sample_id, popul
 - **Foreign key constraints are enforced** (`PRAGMA foreign_keys = ON`), so
   the relational integrity in the schema is actually checked at insert time,
   not just declared as documentation.
+
+**Scalability.** This schema and SQLite specifically hold up fine at the
+current size (3,500 subjects, 10,500 samples, 52,500 cell-count rows) and
+would still be comfortable at 10-100x that. Past that, three things would
+actually need to change:
+
+- **`project` becomes its own table.** Right now it's a plain string column
+  on `subjects`. At hundreds of projects, project-level metadata (PI,
+  institution, funding source, start date) needs somewhere to live that
+  isn't duplicated across every subject row -- a `projects` table
+  (`project_id` PK, plus those attributes) with `subjects.project_id` as a
+  foreign key, same normalization logic already applied to `subjects` and
+  `samples`.
+- **Indexes on the columns actually filtered on.** `subject_id`,
+  `sample_type`, `time_from_treatment_start`, and `population` are the
+  columns every query in this project group-bys or filters on. SQLite
+  handles the current volume fine without extra indexes, but at real scale
+  these would need explicit indexes (or, in Postgres, the equivalent) --
+  otherwise every filtered query degrades to a full table scan as row
+  counts grow.
+- **SQLite itself becomes the limiting factor before the schema does.**
+  SQLite is single-writer and file-based, which is exactly right for a
+  self-contained, reproducible analysis pipeline like this one, but the
+  wrong choice once multiple analysts need concurrent read/write access or
+  the database needs to live somewhere other than "next to the code that
+  built it." The schema itself is standard relational SQL and moves to
+  Postgres (or similar) without any redesign -- this is a deployment
+  decision, not a schema one.
+
+**For "various types of analytics"**, the shape that generalizes well is
+already in place: `cell_counts` being long-format, keyed by `sample_id` +
+`population`, means adding a 6th cell population is just new rows, not a
+schema change (a wide, one-column-per-population table would need an
+actual `ALTER TABLE` every time a new population is measured). The same
+pattern extends to analytics beyond cell counts: a new data type per sample
+(e.g. genomic variants, imaging features, longitudinal lab values) is a new
+fact table keyed by `sample_id`, sitting alongside `cell_counts` rather than
+inside it -- a star-schema-style extension, not a rewrite of `subjects` or
+`samples`.
 
 ## Data validation
 
@@ -365,8 +440,36 @@ boxplot, and a Mann-Whitney test per population, per pair of cohorts.
 Cohort labels must be unique -- the dashboard checks and shows an error
 rather than silently merging two identically-labeled cohorts.
 
+**All four comparison tabs share the same section order** (cohort
+summary, average table + charts, frequency table, distribution boxplot,
+stats table), so switching between them doesn't mean re-learning the
+layout -- confirmed directly by walking the rendered page and checking
+each tab's section headers appear in the same sequence, not just
+eyeballed.
+
+**Every stats table offers the same toggle**: grouped by cell type by
+default (all `b_cell` rows together, then `cd8_t_cell`, in canonical
+order), or a checkbox to instead surface Bonferroni-significant results
+at the top regardless of population. Both orderings answer a genuinely
+different question -- "what's going on with this population
+specifically" vs. "what's the strongest finding here" -- so this is an
+explicit choice, not a default silently picked for you.
+
+**The average-count and average-percentage bar charts facet by
+population with independent y-axis scales**, whenever they're showing a
+comparison (Responder/Non-responder, By Date, Custom -- not the plain
+population-colored version in Default/By Population). This isn't
+cosmetic: between-population variation in raw cell count (e.g. `b_cell`
+~10k vs. `cd4_t_cell` ~30k) is far larger than the real variation across
+comparison groups within one population (often under 2%), so a shared
+axis makes correctly-computed differences visually invisible. Verified
+directly against real data before concluding this was a display problem,
+not a computation bug: per-timepoint averages for `b_cell` genuinely
+differ (9908 -> 9965 -> 9909 across the 3 days), just by an amount too
+small to see against a ~20,000-unit shared scale.
+
 **These results are exploratory, not confirmatory.** Every comparison
-mode lets you re-slice the cohort and re-run the same test machinery in
+tab lets you re-slice the cohort and re-run the same test machinery in
 effectively unlimited ways -- a classic garden-of-forking-paths setup.
 Bonferroni correction is applied correctly within a single result (across
 every population/pair combination actually tested), but there's no
@@ -379,22 +482,34 @@ their own.
 Age can be set either by dragging the slider or by typing exact values
 into the Min age / Max age number inputs. The two stay in sync in either
 direction (moving the slider updates the number inputs, and vice versa).
+Comparison-group order (Responder before Non-responder, chronological
+timepoints, cohort A before B before C before D) is pinned explicitly
+throughout -- both in the underlying data (`get_population_averages`,
+`compare_n_groups`) and in each chart's `category_orders` -- rather than
+left to default alphabetical or click-order sorting. That default
+sorting was a real, confirmed inconsistency at one point (the average
+table showed "Non-responder" before "Responder" while the distribution
+boxplot showed the opposite), and `st.multiselect` returns selections in
+the order clicked, not the options list order, which would otherwise let
+a timepoint comparison silently render out of chronological order
+depending on click order.
 
 Because narrowing a cohort can shrink group sizes quickly, every stats
 result reports the current **n per group**, and handles four distinct edge
 cases explicitly rather than crashing or silently misleading:
 
-1. **No samples match the selected filters at all** (Explorer) / **one or
-   both cohorts are empty** (Comparison). One clear message, shown once,
-   before any per-population stats are attempted.
+1. **No samples match the selected filters at all**, or (Custom/By Date/By
+   Population) **fewer than 2 of the selected groups have any matching
+   samples**. One clear message, shown once, before any per-population
+   stats are attempted.
 2. **Samples exist but have no response data at all**, e.g. filtering to
    `treatment='none'` (untreated/healthy subjects). Reported with an
    explanation of why (response doesn't apply to untreated subjects), not
    just "no data."
 3. **Samples exist but a specific population has no individuals in one of
-   the two groups being compared**. Reported per population, distinct
+   the groups being compared**. Reported per population, distinct
    from cases 1 and 2.
-4. **Both groups have data but one or both are small (n < 20)**. The
+4. **All groups have data but one or more are small (n < 20)**. The
    result is still computed and shown, with a visible warning that the
    p-value may be unreliable at that sample size. Nothing is hidden.
 
@@ -414,11 +529,30 @@ label). The Response and Cohort colors are drawn from the Okabe-Ito
 palette, a peer-reviewed colorblind-safe palette (safe for deuteranopia,
 protanopia, and tritanopia). Population names are also color-coded in the
 summary tables (average counts, stats results), using pandas' `Styler`.
-Boxplots differentiate the two compared groups (e.g. Responder vs.
-Non-responder) without relying on color at all -- color there encodes
-population instead -- using box outline width, opacity, and outlier-point
-marker shape (Plotly's `Box` trace doesn't support dashed outlines or
-hatched fills, verified directly against the installed version).
+
+**Boxplots** fill each box in the compared group's own color, exactly
+matching that group's legend swatch -- there's never a mismatch between
+what the legend shows and what's actually drawn. Population is conveyed
+separately: each facet's background is tinted with that population's own
+color at a low, fixed opacity (`POPULATION_BACKGROUND_OPACITY`), and the
+population name is shown as that facet's x-axis title. A small key below
+each boxplot shows exactly which population color maps to which
+background tint -- built from the *exact* list of populations the
+boxplot actually faceted (returned directly by `render_boxplot`), not
+independently recomputed from a stats table, since two separate
+computations of "which populations, in what order" can drift apart if
+either one's filtering logic changes later (this happened once: a
+population-filtered cohort produced facets for all 5 populations
+regardless of what was actually selected, misaligning every facet-indexed
+label onto the wrong facet). The key's swatch opacity matches the actual
+facet background exactly, rather than a solid, fully-opaque dot -- an
+earlier version showed a visibly more saturated color in the key than
+what the chart itself displayed.
+
+**Cohort summary** (Default, Responder vs Non-responder, By Population,
+and By Date tabs, plus Custom's combined per-cohort version) breaks down
+subjects by project, condition, treatment, response, and sex -- 5 tables
+total, always in that order.
 
 **Filters** are collapsed by default inside an expander, with a badge
 showing how many filters are currently active even while collapsed (e.g.
@@ -454,6 +588,9 @@ Filtered to melanoma, PBMC, miraclib-treated, baseline (`time_from_treatment_sta
 
 (Response/sex counts are per-subject, not per-sample, since each subject has
 exactly one response and sex value across all their samples.)
+
+Reproducible via `make pipeline` (writes `baseline_melanoma_samples.csv` and
+`part4_summary.txt`) or the same filters in the dashboard's Default tab.
 
 ## Note on the assignment document
 
