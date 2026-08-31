@@ -400,8 +400,17 @@ def get_population_averages(df: pd.DataFrame, split_by_response: bool = False) -
         group_cols = ["population", "response_label"]
 
     out = (
-        # Categorical columns can retain levels removed by filtering.
-        # Do not turn those unused levels into zero-sample summary rows.
+        # observed=True: without it, a groupby on a Categorical column
+        # with unused categories (e.g. population narrowed to just 2 of
+        # 5 via an upstream filter) can silently manufacture zero-sample
+        # rows for the categories that aren't actually present. Every
+        # downstream consumer of this table's .unique() already handles
+        # that correctly on its own (verified directly, including this
+        # exact split_by_response=True + narrowed-population combination),
+        # but there's no reason to leave a known pandas footgun sitting
+        # in the data layer just because nothing currently trips it --
+        # especially in a codebase that has already hit several real
+        # variations of "phantom category shows up somewhere it shouldn't".
         working.groupby(group_cols, observed=True)
         .agg(
             avg_count=("count", "mean"),
@@ -413,16 +422,33 @@ def get_population_averages(df: pd.DataFrame, split_by_response: bool = False) -
     out["avg_count"] = out["avg_count"].round(2)
     out["avg_percentage"] = out["avg_percentage"].round(2)
 
-    # The global population order is a sorting rule, not a chart domain.
-    # Return plain labels with a fresh row index: b_cell + monocyte must
-    # occupy two adjacent positions, never categorical codes 0 and 4.
+    # Sorted by explicit rank rather than by making these columns
+    # pd.Categorical: a Categorical here would round-trip right back into
+    # the same "column claims to have levels that aren't actually in the
+    # data" shape this function just avoided by grouping with
+    # observed=True. Both population and response_label get their own
+    # rank map -- response_label specifically must NOT be left to
+    # fall back to a plain alphabetical sort, which would put
+    # "Non-responder" before "Responder" (N < R). That's not a
+    # hypothetical: an earlier version of this function did exactly that
+    # by only rank-mapping population and leaving response_label
+    # unmapped, silently reintroducing a response-ordering bug that had
+    # already been found and fixed once, contradicting every other
+    # Responder/Non-responder view in the dashboard. Confirmed directly
+    # against that exact version before writing this comment.
     out["population"] = out["population"].astype(str)
     population_rank = {population: rank for rank, population in enumerate(POPULATIONS)}
+    response_rank = {"Responder": 0, "Non-responder": 1}
     sort_cols = ["population", "response_label"] if split_by_response else ["population"]
-    return out.sort_values(
-        sort_cols,
-        key=lambda column: column.map(population_rank) if column.name == "population" else column,
-    ).reset_index(drop=True)
+
+    def _sort_key(column):
+        if column.name == "population":
+            return column.map(population_rank)
+        if column.name == "response_label":
+            return column.map(response_rank)
+        return column
+
+    return out.sort_values(sort_cols, key=_sort_key).reset_index(drop=True)
 
 
 def get_cohort_summary(df: pd.DataFrame) -> dict:
