@@ -17,7 +17,7 @@ Quickstart below.
 make setup       # installs dependencies (uses uv if available, falls back to pip)
 make pipeline    # builds cell_counts.db, then generates every Part 2-4 output file/plot
 make dashboard   # streamlit run app.py, launches the interactive dashboard
-make test        # installs dev dependencies, then runs pytest
+make test        # installs dev dependencies, builds cell_counts.db if missing, then runs pytest
 ```
 
 Equivalent plain commands, if you would rather not use `make`:
@@ -68,6 +68,16 @@ runs the full test suite (`tests/test_analysis.py` and `tests/test_app.py`,
 push and pull request via GitHub Actions (`.github/workflows/tests.yml`).
 Check the "Actions" tab on the repo, or the checkmark next to any commit,
 to see the result without running anything locally.
+
+`make test` is self-sufficient: it installs dev dependencies and, if
+`cell_counts.db` does not already exist, builds it first, via a real Make
+file dependency on `cell-count.csv`/`schema.sql`/`load_data.py` (not just
+an unconditional rebuild every time). Neither `make setup` nor
+`make pipeline` needs to be run first. This is a second, independent
+layer alongside `tests/conftest.py`'s own `ensure_db` fixture, which
+already builds the database itself whenever pytest is run directly
+(`.github/workflows/tests.yml`'s CI job does exactly this, calling
+`pytest -v` directly rather than through `make test`).
 
 `test_analysis.py` covers the query/analysis layer directly: known row
 counts, the four-case stats handling (no samples, no response data, no
