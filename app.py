@@ -504,12 +504,28 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
         fig = px.bar(
             avg_table, x=color_col, y=y_col, color=color_col,
             color_discrete_map=color_map, facet_col="population", facet_col_wrap=5,
+            facet_col_spacing=0.05,
             title=title, labels={y_col: y_label}, category_orders=category_orders,
         )
-        fig.update_yaxes(matches=None, gridcolor="#000000", gridwidth=0.5)
+        # Each facet keeps its own y scale (matches=None) so small
+        # within-population group differences aren't crushed by the much
+        # larger between-population spread. Two consequences are handled
+        # here: tick labels go on EVERY facet (Plotly Express only labels
+        # the leftmost column by default, which would leave the other
+        # facets on silent, unlabeled scales of their own), and gridlines
+        # are turned off entirely (with five independent ranges, each
+        # facet's gridlines land at different heights, which reads as
+        # broken rather than informative).
+        fig.update_yaxes(
+            matches=None, showgrid=False, showticklabels=True,
+            tickfont=dict(size=9),
+        )
         if yaxis_tickformat:
             fig.update_yaxes(tickformat=yaxis_tickformat)
-        fig.update_xaxes(showticklabels=False)
+        fig.update_xaxes(showticklabels=False, title_text=None)
+        fig.update_layout(
+            legend_title_text=color_col.replace("_label", "").replace("_", " ").capitalize()
+        )
         fig.update_traces(marker_line_width=1.5, marker_opacity=GROUP_FILL_ALPHA)
         for trace in fig.data:
             trace.marker.line.color = trace.marker.color
