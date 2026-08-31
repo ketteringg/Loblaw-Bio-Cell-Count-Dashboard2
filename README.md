@@ -64,7 +64,7 @@ make test
 ```
 
 runs the full test suite (`tests/test_analysis.py` and `tests/test_app.py`,
-81 tests as of writing) via `pytest`. This also runs automatically on every
+82 tests as of writing) via `pytest`. This also runs automatically on every
 push and pull request via GitHub Actions (`.github/workflows/tests.yml`).
 Check the "Actions" tab on the repo, or the checkmark next to any commit,
 to see the result without running anything locally.
@@ -706,3 +706,19 @@ this, most likely by setting `"responsive": True` in `PLOTLY_CONFIG` and
 testing whether that alone is sufficient, or, if not, computing each
 chart's height dynamically (e.g. from facet count or container width)
 rather than relying on Plotly's fixed default.
+
+**Bar width in the average-count and average-percentage bar charts is
+not tuned.** `_build_avg_bar_chart` in `app.py` builds every bar chart
+with `px.bar(..., barmode="group")` and never sets `bargap`,
+`bargroupgap`, or an explicit per-trace `width`, so bar sizing is left
+entirely to Plotly's untuned defaults. The current result does not look
+right (bars read as too wide relative to the space between them, and
+that changes noticeably between the 5-population single-panel charts on
+Default/By Population and the per-population-facet comparison charts on
+the other tabs, since facet count and group count both affect how
+Plotly's default sizing divides up the available width). This is a
+separate issue from the chart-height limitation above; fixing it means
+explicitly tuning `bargap`/`bargroupgap` (and possibly setting a fixed
+`width` per bar) rather than relying on Plotly's defaults, most likely
+with different tuned values for the single-panel and faceted cases,
+which is future work not yet done.
