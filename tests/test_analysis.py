@@ -18,7 +18,6 @@ from analysis import (
     add_clr_column,
     check_group_balance,
     get_frequency_table,
-    get_sample_totals,
     get_responder_comparison,
     run_stats_test,
     run_stats_test_safe,
@@ -59,44 +58,6 @@ def test_frequency_table_percentages_sum_to_100_per_sample(conn):
     totals = freq.groupby("sample")["percentage"].sum()
     # Allow tiny floating point slack, not exact-100 comparison.
     assert (totals - 100).abs().max() < 1e-6
-
-
-def test_sample_totals_row_count_and_no_duplicates(conn):
-    """One row per sample, not per (sample, population)."""
-    totals = get_sample_totals(conn)
-    assert len(totals) == 10500
-    assert list(totals.columns) == ["sample", "total_count"]
-    assert not totals["sample"].duplicated().any()
-
-
-def test_sample_totals_match_frequency_table_total_count(conn):
-    """get_sample_totals is meant to surface the same total_count that
-    already appears (repeated once per population) inside
-    get_frequency_table's output, as its own standalone table. Confirms
-    the two never disagree, since generate_outputs.py writes both as
-    separate files and a grader could reasonably cross-check them."""
-    freq = get_frequency_table(conn)
-    totals = get_sample_totals(conn)
-    merged = freq[["sample", "total_count"]].drop_duplicates("sample").merge(
-        totals, on="sample", suffixes=("_freq", "_totals")
-    )
-    assert len(merged) == 10500
-    assert (merged["total_count_freq"] == merged["total_count_totals"]).all()
-
-
-def test_sample_totals_equal_sum_of_the_five_populations(conn):
-    """Direct check against the assignment's own wording: 'for each
-    sample, calculate the total number of cells by summing the counts
-    across all five populations.' Recomputes that sum independently
-    (not by reusing get_frequency_table's internal groupby/transform)
-    and checks it against get_sample_totals's output for a handful of
-    samples, rather than trusting the same computation to check itself."""
-    full = get_full_dataset(conn)
-    totals = get_sample_totals(conn)
-    for sample_id in ["sample00000", "sample00042", "sample10499"]:
-        manual_sum = full[full["sample"] == sample_id]["count"].sum()
-        reported = totals.loc[totals["sample"] == sample_id, "total_count"].iloc[0]
-        assert reported == manual_sum
 
 
 # ---------- Part 3: stats ----------
@@ -576,7 +537,7 @@ def test_generate_outputs_produces_all_required_files(conn):
 
     project_root = Path(__file__).parent.parent
     outputs = [
-        "part2_frequency_table.csv", "part2_sample_total_counts.csv",
+        "part2_frequency_table.csv",
         "part3_stats_results.csv", "part3_boxplot_responders.png",
         "part4_baseline_melanoma_samples.csv", "part4_summary.txt",
     ]
