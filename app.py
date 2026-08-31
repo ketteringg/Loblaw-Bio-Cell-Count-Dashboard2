@@ -11,11 +11,9 @@ filtered cohorts). Every comparison tab shares the same section order
 (cohort summary, average table + charts, frequency table, distribution
 boxplot, stats table) and the same stats-table controls (grouped by cell
 type by default, with a toggle to surface significant results instead).
-There are no fixed tabs for the assignment's Part 2/3/4 cohorts
-specifically -- those are special cases of what these tabs already
-produce by setting the equivalent filters, so a dedicated tab for each
-would just be showing the same underlying data twice. See README.md for
-how to reproduce those specific answers.
+There are no fixed tabs for the assignment's Part 2/3/4 cohorts; those
+are reproduced by setting the equivalent filters (see README.md, "Code
+structure and why").
 
 Run with:
     streamlit run app.py
@@ -486,8 +484,8 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
     b_cell ~10k cells vs cd4_t_cell ~30k) read directly from bar
     heights. Within-population differences across comparison groups are
     often under 1-2%, too small to read from zero-based bars at any
-    scale; the average table and the stats table are the right place to
-    read those.
+    scale; the averages table and the stats table are the right place
+    to read those.
 
     Both branches use marker_opacity=GROUP_FILL_ALPHA, the same value
     the boxplot fills use (see render_boxplot), so the same population
@@ -505,13 +503,7 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
             color_discrete_map=color_map, facet_col="population", facet_col_wrap=5,
             title=title, labels={y_col: y_label}, category_orders=category_orders,
         )
-        # All facets share one y scale (matches="y", labeled on the
-        # leftmost facet), so between-population scale differences
-        # (b_cell ~10k vs cd4_t_cell ~30k) read directly from bar
-        # heights and gridlines align across facets. Within-population
-        # differences between comparison groups are often under 2%,
-        # too small to read from zero-based bars at any scale; the
-        # average table and the stats table are the place to read those.
+        # Shared y scale across all facets; rationale in the docstring above.
         fig.update_yaxes(matches="y", gridcolor="#000000", gridwidth=0.5)
         if yaxis_tickformat:
             fig.update_yaxes(tickformat=yaxis_tickformat)
@@ -742,8 +734,8 @@ def render_comparison_stats_table(
 
 def render_n_group_messages(status: str, results: pd.DataFrame | None):
     """Shared rendering of compare_n_groups' / compare_populations_paired's
-    status cases -- generalizes render_stats_messages/the old
-    render_cohort_comparison_messages to an arbitrary number of groups."""
+    status cases, for any number of groups (the N-group counterpart of
+    render_stats_messages)."""
     if status == "insufficient_groups":
         st.info(
             "Fewer than 2 of the selected groups have any matching samples. "
@@ -768,11 +760,10 @@ def render_n_group_messages(status: str, results: pd.DataFrame | None):
 
 
 def render_n_group_boxplot(group_dfs: dict, stats_df: pd.DataFrame, colors: list, x_label: str = "group"):
-    """Boxplot for 2 or more arbitrary groups, faceted by population --
-    generalizes the old render_cohort_comparison_boxplot (which was fixed
-    at exactly 2 cohorts) to any number of groups via render_boxplot's own
-    N-group support. Returns (fig, present_populations), same as
-    render_boxplot -- this just forwards it."""
+    """Boxplot for 2 or more arbitrary groups, faceted by population: a
+    thin wrapper that concatenates the group dataframes under an x_label
+    column and forwards to render_boxplot. Returns
+    (fig, present_populations), same as render_boxplot."""
     frames = []
     for label, df in group_dfs.items():
         d = df.copy()
