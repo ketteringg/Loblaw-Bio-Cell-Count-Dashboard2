@@ -39,38 +39,22 @@ def format_pvalue(p) -> str:
 def add_clr_column(df: pd.DataFrame) -> pd.DataFrame:
     """
     Adds a `clr` column: the centered log-ratio transform of each row's
-    count, computed per sample across that sample's full 5-population set.
+    count, computed per sample across that sample's full 5-population
+    set. clr_i = ln(count_i) - mean(ln(counts)) for that sample.
 
-    Why: the 5 cell populations are compositional data -- they sum to
-    100% of each sample's total cell count, so an increase in one
-    population mechanically forces the others down. That "closure"
-    constraint means the 5 populations are not independent, and running a
-    standard test directly on raw percentages (or raw counts) treats them
-    as if they were, which can manufacture or mask apparent significance.
-    CLR removes the constraint by moving from percentages to log-ratios
-    relative to each sample's own geometric mean across populations,
-    putting the data in ordinary (unconstrained) real space where
-    standard statistics are valid. clr_i = ln(count_i) - mean(ln(counts))
-    for that sample.
-
-    Caveat: CLR is not a complete fix. The D=5
-    CLR-transformed values for a sample still sum to exactly zero by
-    construction, so one linear dependency remains among them (unlike
-    ILR, which uses D-1 orthonormal coordinates and removes the
-    constraint entirely). CLR was chosen over ILR here because CLR keeps
-    one interpretable value per population -- matching what the
-    assignment and Bob actually need ("which populations differ") --
-    whereas ILR's coordinates are linear combinations across multiple
-    populations at once and don't map back to a single population
-    cleanly. See README for the empirical comparison against testing
-    directly on raw percentages.
+    The 5 populations are compositional (they sum to 100% of each
+    sample's cells), so every significance test in this project runs on
+    CLR values rather than raw percentages. The full rationale, the
+    CLR-vs-ILR trade-off, and the empirical raw-vs-CLR comparison live
+    in the README's "Statistical approach" section; this docstring only
+    covers what the implementation needs.
 
     Requires every population's count to be > 0 for a given sample (true
     throughout this dataset; the minimum observed count is 1835). If a
     future dataset has a zero count, log(0) is undefined; rows for that
-    sample get `clr = NaN` rather than raising,
-    so callers relying on `clr` should be aware a sample could silently
-    drop out of a CLR-based test if this prerequisite is ever violated.
+    sample get `clr = NaN` rather than raising, so callers relying on
+    `clr` should be aware a sample could silently drop out of a
+    CLR-based test if this prerequisite is ever violated.
     """
     out = df.copy()
     has_zero = out.groupby("sample")["count"].transform(lambda x: (x <= 0).any())
@@ -169,15 +153,11 @@ def run_stats_test(comparison_df: pd.DataFrame) -> pd.DataFrame:
     """
     Mann-Whitney U test per population, responders vs non-responders.
 
-    The test itself runs on the CLR-transformed value (see
-    add_clr_column), not the raw percentage: the 5 populations are
-    compositional data (percentages that sum to 100% per sample aren't
-    independent), and testing directly on percentages can manufacture or
-    mask apparent significance as a result. Reported medians below are
-    still percentages, since that's the natural, interpretable unit for
-    describing composition -- only the significance test itself uses CLR.
-    See the README's "Statistical approach" section for the empirical
-    raw-percentage vs CLR comparison on this cohort.
+    The test runs on the CLR-transformed value, not the raw percentage;
+    see add_clr_column and the README's "Statistical approach" section
+    for the rationale and the empirical raw-vs-CLR comparison. Reported
+    medians are still percentages, the natural unit for composition --
+    only the significance test itself uses CLR.
 
     Takes the already-fetched comparison DataFrame (pure computation,
     no DB access) so it stays independently testable.
