@@ -71,10 +71,8 @@ def main() -> None:
         stats.to_csv(ROOT / "part3_stats_results.csv", index=False)
         print(f"Wrote part3_stats_results.csv ({len(stats)} rows)")
 
-        # Plain matplotlib, not seaborn: the boxplot/stripplot combination
-        # doesn't need an extra dependency for something matplotlib
-        # already does natively, and keeping requirements.txt minimal
-        # means fewer ways `make setup` can fail in a fresh Codespaces
+        # Plain matplotlib: keeps requirements.txt minimal, which means
+        # fewer ways `make setup` can fail in a fresh Codespaces
         # environment.
         fig, axes = plt.subplots(1, len(POPULATIONS), figsize=(3 * len(POPULATIONS), 5), sharey=True)
         rng = np.random.default_rng(0)  # fixed seed, so output is reproducible run to run
@@ -83,9 +81,8 @@ def main() -> None:
             responders = pop_df[pop_df["response"] == "yes"]["percentage"]
             non_responders = pop_df[pop_df["response"] == "no"]["percentage"]
             ax.boxplot([responders, non_responders], tick_labels=["Responder", "Non-responder"])
-            # Individual points, jittered slightly on x so they don't all
-            # overlap in a single vertical line: the matplotlib
-            # equivalent of what sns.stripplot was doing.
+            # Individual points, jittered slightly on x so they don't
+            # all overlap in a single vertical line.
             for i, values in enumerate([responders, non_responders], start=1):
                 jitter = rng.uniform(-0.08, 0.08, size=len(values))
                 ax.scatter(i + jitter, values, color="black", alpha=0.25, s=6, zorder=3)
