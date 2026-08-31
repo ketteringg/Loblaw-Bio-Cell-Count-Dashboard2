@@ -583,24 +583,69 @@ def test_generate_outputs_produces_all_required_files(conn):
 
 # ---------- committed output files must not go stale ----------
 #
-# These check whatever is CURRENTLY COMMITTED in the repo against a
-# fresh recomputation from the current code, not just that the code
-# produces the right answer when it runs (test_generate_outputs_
-# produces_all_required_files above already covers that). This is a
-# distinct failure mode, and a real one: a stale, pre-melanoma-fix
-# stats_results.csv was once left committed under an old filename
-# (stats_results.csv rather than part3_stats_results.csv), showing a
-# different cohort size (1,707 vs 993 responders) and incorrectly
-# flagging b_cell and monocyte as significant, values the current,
-# correctly melanoma-restricted analysis does not support. Since the
-# assignment asks the submission to include "any input or output files
-# generated," these files are committed (not gitignored, see
-# .gitignore), which reintroduces exactly the staleness risk gitignoring
-# them would have avoided. These tests are the mitigation: they run on
-# every `make test` and every CI push, and fail loudly the moment a
-# committed file's claims disagree with what the current code actually
-# produces, rather than relying on someone remembering to regenerate and
-# re-commit by hand.
+# Two distinct checks live here, because one alone was not enough: an
+# earlier version of this section only checked that the CONTENT of the
+# correctly-named committed files (part3_stats_results.csv etc.) matched
+# a fresh recomputation. That caught a stale file being re-committed
+# under its correct name, but did nothing about an old, differently-
+# named duplicate (stats_results.csv, not part3_stats_results.csv)
+# sitting in the repo alongside it. That gap was not hypothetical: the
+# exact stale, pre-melanoma-fix stats_results.csv this section already
+# describes below was found still present, under its old name, in two
+# submissions in a row, entirely undetected by every test that only
+# looked at the part3_-prefixed file. test_no_stale_prerename_output_
+# files_exist is the fix for that specific gap: it checks for the mere
+# EXISTENCE of any of the old filenames, unconditionally, regardless of
+# what they contain, since their presence alongside the current files is
+# itself the problem (a reader has no way to know which of two
+# identically-purposed files under different names is the current one).
+#
+# The tests below it check whatever is CURRENTLY COMMITTED under the
+# CORRECT name against a fresh recomputation from the current code, not
+# just that the code produces the right answer when it runs
+# (test_generate_outputs_produces_all_required_files above already
+# covers that). This is a distinct failure mode, and a real one: a
+# stale, pre-melanoma-fix stats_results.csv was once left committed
+# under an old filename, showing a different cohort size (1,707 vs 993
+# responders) and incorrectly flagging b_cell and monocyte as
+# significant, values the current, correctly melanoma-restricted
+# analysis does not support. Since the assignment asks the submission to
+# include "any input or output files generated," these files are
+# committed (not gitignored, see .gitignore), which reintroduces exactly
+# the staleness risk gitignoring them would have avoided. These tests
+# are the mitigation: they run on every `make test` and every CI push,
+# and fail loudly the moment a committed file's claims disagree with
+# what the current code actually produces, rather than relying on
+# someone remembering to regenerate and re-commit by hand.
+
+def test_no_stale_prerename_output_files_exist():
+    """See the section comment above. Old, pre-rename filenames must not
+    exist anywhere in the repo root, full stop, regardless of their
+    content. Their content isn't even inspected here, because their
+    mere presence next to the correctly-named current files is already
+    the failure. This is a real, recurring incident, not a hypothetical
+    one: confirmed present in two submissions running, undetected by
+    every content-based staleness check below because those only ever
+    looked at the correctly-named files."""
+    from pathlib import Path
+    project_root = Path(__file__).parent.parent
+    stale_names = [
+        "frequency_table.csv",
+        "stats_results.csv",
+        "boxplot_responders.png",
+        "baseline_melanoma_samples.csv",
+    ]
+    present = [name for name in stale_names if (project_root / name).exists()]
+    assert not present, (
+        f"Found old, pre-rename output file(s) still present in the repo "
+        f"root: {present}. These were replaced by part2_/part3_/part4_-"
+        f"prefixed equivalents. Remove the old-named file(s) entirely "
+        f"(`git rm <file>` if tracked, or `rm <file>` if not) rather than "
+        f"leaving them sitting alongside the current ones. A stale "
+        f"duplicate under a different name is exactly as misleading as a "
+        f"stale duplicate under the same name."
+    )
+
 
 def test_committed_part3_stats_results_matches_fresh_regeneration(conn):
     from pathlib import Path
