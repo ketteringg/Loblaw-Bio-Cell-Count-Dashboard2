@@ -8,8 +8,8 @@ __pycache__/
 venv/
 env/
 
-# Streamlit local cache/logs. Not .streamlit/config.toml, which is the
-# project's theme file and should be committed.
+# Streamlit local cache/logs (not .streamlit/config.toml, which is the
+# committed theme file)
 .streamlit/secrets.toml
 
 # OS-specific
@@ -25,26 +25,8 @@ Thumbs.db
 .coverage
 htmlcov/
 
-# cell_counts.db is a generated build artifact, not itself one of the
-# assignment's requested "input or output files." It's an intermediate
-# step between cell-count.csv (input) and the part2/3/4 files (outputs).
-# It stays gitignored: trivially and quickly regenerated from
-# cell-count.csv via `python load_data.py`, and there's no value in
-# committing a 4MB binary SQLite file when the CSV it's built from is
-# already committed.
-#
-# The part2/3/4 output files themselves are NOT gitignored (see
-# "Repository contents" in README.md): the assignment explicitly asks
-# the submission to include "any input or output files generated," so
-# they're committed like any other deliverable. This does reintroduce a
-# staleness risk gitignoring them would have avoided: a committed CSV
-# can in principle drift out of sync with the code that's supposed to
-# produce it. That risk is real, not hypothetical: a stale,
-# pre-melanoma-fix stats_results.csv was once left committed under an
-# old filename, contradicting the current, correctly-scoped analysis.
-# The mitigation is tests/test_analysis.py's
-# test_committed_part3_stats_results_matches_fresh_regeneration and its
-# neighbors, which run on every `make test` and every CI push, and fail
-# loudly if a committed output file's claims disagree with what the
-# current code actually produces.
+# Generated build artifact, quickly and deterministically rebuilt from
+# cell-count.csv via `python load_data.py`. The part2/3/4 output files
+# ARE committed (the assignment asks for generated outputs); this
+# intermediate .db is not.
 cell_counts.db
