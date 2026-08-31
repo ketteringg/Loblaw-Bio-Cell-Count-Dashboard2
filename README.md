@@ -386,12 +386,13 @@ Bonferroni-significant results at the top. Comparison-group order
 before B) is pinned explicitly throughout rather than left to
 alphabetical or click-order sorting.
 
-The comparison bar charts facet by population with independent y-axis
-scales. This isn't cosmetic: between-population variation in raw cell
-count (e.g. `b_cell` ~10k vs `cd4_t_cell` ~30k) is far larger than the
-real variation across comparison groups within one population (often
-under 2%), so a shared axis would make correctly-computed differences
-visually invisible.
+The comparison bar charts facet by population on a shared y-axis, so
+between-population scale differences (e.g. `b_cell` ~10k vs `cd4_t_cell`
+~30k) read directly from bar heights and gridlines align across facets.
+Within-population differences between comparison groups are often under
+2%, too small to read from zero-based bars at any scale; the average
+table and the stats table are the place to read those, and the
+distribution boxplot shows them at higher resolution.
 
 **These results are exploratory, not confirmatory.** The comparison tabs
 let you re-slice the cohort and re-run the same test machinery in
