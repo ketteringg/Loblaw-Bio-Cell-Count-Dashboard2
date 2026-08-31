@@ -330,3 +330,71 @@ def test_boxplot_only_facets_present_populations(app):
     filtered_keys = [p for p in parsed if len(p) == 2]
     assert len(filtered_keys) == 1
     assert filtered_keys[0] == ["b_cell", "cd4_t_cell"]
+
+
+def test_population_key_swatch_opacity_matches_facet_background(app):
+    """Regression test: the population key's swatches used to render at
+    full opacity (a solid, saturated dot), while the actual facet
+    backgrounds render at POPULATION_BACKGROUND_OPACITY (0.15) -- a real
+    mismatch between what the key showed and what the chart actually
+    looked like. Every swatch's rgba() alpha should now equal 0.15
+    exactly. (The guaranteed-order fix -- render_boxplot returning the
+    exact populations list it graphed, rather than callers independently
+    recomputing their own guess -- is covered implicitly: every test
+    below that exercises Responder/By Date/Custom would fail with a
+    ValueError on `fig, graphed_populations = render_boxplot(...)` if
+    that return shape were ever wrong.)"""
+    import re
+    keys = [m.value for m in app.markdown if "Facet background" in m.value]
+    assert len(keys) >= 1
+    for key in keys:
+        opacities = re.findall(r"rgba\(\d+, \d+, \d+, ([\d.]+)\)", key)
+        assert len(opacities) >= 1
+        for o in opacities:
+            assert float(o) == 0.15
+
+
+# ---------- Cohort summary: response breakdown ----------
+
+def test_cohort_summary_includes_response_breakdown(app):
+    """The cohort summary card (Default, Responder, By Population, By
+    Date, and Custom's combined version) should include a subjects-by-
+    response breakdown alongside project/condition/treatment/sex --
+    get_cohort_summary already computed this, it just wasn't displayed."""
+    assert any("By response" in m.value for m in app.markdown)
+
+
+# ---------- Average-count/percentage charts: no empty category gaps ----------
+
+def test_avg_charts_only_show_present_populations(ensure_db):
+    """Regression test for a real bug: filtering the Default tab's cohort
+    to a subset of populations (e.g. just b_cell + cd4_t_cell) used to
+    still reserve x-axis space for all 5 populations in the average-count
+    and average-percentage bar charts (Plotly Express creates one x-axis
+    category per category_orders entry, even with zero matching rows),
+    leaving visibly empty gaps where the excluded populations would be.
+    Verified directly on a reconstructed figure -- exactly 2 x-axis
+    categories, not 5, matching what the underlying avg_table actually
+    contains."""
+    import sqlite3
+    import plotly.express as px
+    from analysis import get_full_dataset, filter_dataset, get_population_averages, POPULATIONS
+
+    POP_COLORS_TEST = {
+        "b_cell": "#7DB760", "cd8_t_cell": "#6067B7", "cd4_t_cell": "#BCB96B",
+        "nk_cell": "#60B0B7", "monocyte": "#B85951",
+    }
+    conn = sqlite3.connect(ensure_db)
+    conn.execute("PRAGMA foreign_keys = ON")
+    full = get_full_dataset(conn)
+    filtered = filter_dataset(full, population=["b_cell", "cd4_t_cell"])
+    avg_table = get_population_averages(filtered)
+
+    present_populations = [p for p in POPULATIONS if p in avg_table["population"].unique()]
+    fig = px.bar(
+        avg_table, x="population", y="avg_count", color="population",
+        color_discrete_map=POP_COLORS_TEST,
+        category_orders={"population": present_populations},
+    )
+    assert fig.layout.xaxis.categoryarray == ("b_cell", "cd4_t_cell")
+    assert len(fig.data) == 2
