@@ -39,20 +39,20 @@ Tested with Python 3.12 and the exact package versions pinned in
 
 
 
-## **Part 2: frequency table**
+## Part 2: frequency table
 
 Reproducible via `make pipeline` (writes `part2_frequency_table.csv`) or 
 the same filters in the dashboard's Default tab.
 
 
-## **Statistical approach (Part 3)**
+## Statistical approach (Part 3)
 
 Reproducible via `make pipeline` (writes `part3_boxplot_responders.png` 
 and `part3_stats_results.csv`) or the same filters in the dashboard's Default 
 tab.
 
 
-## **Part 4: baseline cohort summary**
+## Part 4: baseline cohort summary
 
 Reproducible via `make pipeline` (writes `part4_baseline_melanoma_samples.csv` 
 and `part4_summary.txt`) or the same filters in the dashboard's Default tab.
