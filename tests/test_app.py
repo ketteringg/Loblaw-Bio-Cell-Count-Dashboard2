@@ -152,14 +152,14 @@ def test_by_population_tab_has_no_population_prefilter(app):
 # ---------- By Date tab ----------
 
 def test_by_date_tab_default_all_timepoints(app):
-    assert any("Mann-Whitney U results" in m.value for m in app.markdown)
+    assert any("Wilcoxon signed-rank results (paired)" in m.value for m in app.markdown)
 
 
 def test_by_date_tab_two_timepoints(app):
     app.multiselect(key="date_mode_selected_times").set_value([0, 7])
     app.run(timeout=30)
     assert not app.exception
-    assert any("Mann-Whitney U results" in m.value for m in app.markdown)
+    assert any("Wilcoxon signed-rank results (paired)" in m.value for m in app.markdown)
 
 
 def test_by_date_tab_single_selection_shows_prompt(app):
