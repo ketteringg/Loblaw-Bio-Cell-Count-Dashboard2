@@ -675,7 +675,7 @@ def get_baseline_melanoma_samples(conn: sqlite3.Connection) -> pd.DataFrame:
     query = """
         SELECT s.sample_id, s.subject_id, s.sample_type,
                s.time_from_treatment_start,
-               sub.project, sub.condition, sub.sex, sub.response
+               sub.project, sub.condition, sub.treatment, sub.sex, sub.response
         FROM samples s
         JOIN subjects sub ON s.subject_id = sub.subject_id
         WHERE sub.condition = 'melanoma'
