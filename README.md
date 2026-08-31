@@ -64,7 +64,7 @@ make test
 ```
 
 runs the full test suite (`tests/test_analysis.py` and `tests/test_app.py`,
-82 tests as of writing) via `pytest`. This also runs automatically on every
+83 tests as of writing) via `pytest`. This also runs automatically on every
 push and pull request via GitHub Actions (`.github/workflows/tests.yml`).
 Check the "Actions" tab on the repo, or the checkmark next to any commit,
 to see the result without running anything locally.
@@ -79,22 +79,35 @@ already builds the database itself whenever pytest is run directly
 (`.github/workflows/tests.yml`'s CI job does exactly this, calling
 `pytest -v` directly rather than through `make test`).
 
-`test_analysis.py` also includes 3 tests that specifically guard against
-committed output files going stale (`test_committed_part3_stats_results_
-matches_fresh_regeneration` and two neighbors): each one reads whatever
-is actually committed in the repo right now and compares it against a
-fresh recomputation from the current code, failing loudly if they
-disagree, rather than trusting that whoever last changed the analysis
-also remembered to regenerate and re-commit the output files by hand.
-This exists because that exact failure happened once: a stale,
-pre-melanoma-fix `stats_results.csv` was left committed under an old
-filename, showing a different cohort size and incorrectly flagging
-`b_cell` and `monocyte` as significant, values the current, correctly
-melanoma-restricted analysis does not support. Confirmed directly that
-this test catches it: reintroducing that exact stale file locally makes
-`test_committed_part3_stats_results_matches_fresh_regeneration` fail with
-a clear message naming the discrepancy, and it passes again once the
-file is regenerated.
+`test_analysis.py` also includes tests that specifically guard against
+committed output files going stale. `test_no_stale_prerename_output_
+files_exist` checks that none of the old, pre-rename filenames
+(`frequency_table.csv`, `stats_results.csv`, `boxplot_responders.png`,
+`baseline_melanoma_samples.csv`) exist anywhere in the repo, full stop,
+regardless of content. `test_committed_part3_stats_results_matches_
+fresh_regeneration` and two neighbors instead check the CORRECTLY-named
+committed files (`part3_stats_results.csv` etc.): each reads whatever is
+actually committed right now and compares it against a fresh
+recomputation from the current code, failing loudly if they disagree,
+rather than trusting that whoever last changed the analysis also
+remembered to regenerate and re-commit the output files by hand.
+
+Both checks exist because a content-only check turned out not to be
+enough. A stale, pre-melanoma-fix `stats_results.csv`, showing a
+different cohort size and incorrectly flagging `b_cell` and `monocyte`
+as significant, was found committed under its old filename, sitting
+alongside the correct `part3_stats_results.csv`. Content-checking only
+the correctly-named file caught nothing, because nothing was checking
+whether the old-named duplicate existed at all: that old file survived,
+undetected, across more than one submission before it was found by
+manual inspection rather than by the test suite. Confirmed directly, for
+both tests, that they actually catch what they are meant to: reintroducing
+the exact stale file under its old name makes
+`test_no_stale_prerename_output_files_exist` fail immediately, and
+reintroducing it under the current, correct filename makes
+`test_committed_part3_stats_results_matches_fresh_regeneration` fail
+with a clear message naming the discrepancy. Both pass again once the
+old file is removed and the current one is freshly regenerated.
 
 `test_analysis.py` covers the query/analysis layer directly: known row
 counts, the four-case stats handling (no samples, no response data, no
@@ -345,6 +358,53 @@ one error message**, not just the first one encountered.
   `treatment` value). This is flagged rather than rejected, since it could
   reflect a legitimate new category rather than corrupt data
 - Implausible age values (<0 or >120)
+
+**What this does and does not cover if a different `cell-count.csv` is
+used.** The checks above are structural and re-run automatically on
+whatever CSV is actually present, so most non-conforming data is caught
+without any code changes: a missing column, a negative or non-numeric
+cell count, a duplicate sample ID, a null where one shouldn't be, or a
+`response`/`treatment` inconsistency all still abort the load and report
+every issue found, on any dataset with this same column structure, not
+just the current one.
+
+Two things are not automatically handled, and are worth being explicit
+about rather than implying more automation exists than actually does:
+
+- **A genuinely new cell population (a 6th population column, not just a
+  new value in an existing categorical column) is silently dropped, not
+  flagged.** `build_database()`'s wide-to-long conversion is
+  `df.melt(..., value_vars=POPULATIONS, ...)`, and `POPULATIONS` is a
+  fixed list of the 5 known population names. An extra column beyond
+  those 5 is never read, never validated, never loaded, and never
+  warned about; it simply doesn't exist as far as the database is
+  concerned. Supporting a 6th population is a 2-file code change, not a
+  data-driven one: `POPULATIONS` is independently defined in both
+  `load_data.py` (kept dependency-light and self-contained on purpose,
+  so it doesn't import from `analysis.py`) and `analysis.py` (the
+  version everything else, `app.py` and `generate_outputs.py` included,
+  imports from). Both would need the new population name added.
+- **The test suite's specific expected numbers are pinned to the current
+  dataset, not derived generically.** Tests like
+  `test_database_has_expected_row_counts` (3,500 subjects / 10,500
+  samples / 52,500 cell-count rows) and
+  `test_baseline_melanoma_sample_count` (656) assert exact values,
+  deliberately: they exist to catch a real computational bug reappearing
+  (like the melanoma-filter regression described in "Statistical
+  approach" above), which requires checking against a known-correct
+  number, not just "some number came out." Swapping in a genuinely
+  different `cell-count.csv` (different subject count, different cohort
+  composition) would make these specific tests fail, correctly, because
+  the ground truth actually changed; they'd need their expected values
+  updated to match the new dataset, not just re-run. This is a
+  deliberate regression-testing tradeoff, not an oversight: the
+  structural checks in `load_data.py` above are what's meant to
+  generalize to new data, not these value-pinned tests.
+
+The output-side counterpart to this is `test_no_stale_prerename_output_
+files_exist` and its neighbors ("Tests" above): once a new CSV is loaded
+and the analysis genuinely changes, those tests are what catch a
+committed output file that wasn't regenerated to match.
 
 ## Part 2: frequency table
 
@@ -706,6 +766,24 @@ this, most likely by setting `"responsive": True` in `PLOTLY_CONFIG` and
 testing whether that alone is sufficient, or, if not, computing each
 chart's height dynamically (e.g. from facet count or container width)
 rather than relying on Plotly's fixed default.
+
+**Bar width in the average-count/average-percentage charts is not
+pinned, only auto-sized.** Neither `_build_avg_bar_chart`'s `px.bar`
+calls nor any later `update_layout`/`update_traces` call sets an explicit
+bar width or `bargap`/`bargroupgap`. Confirmed directly: building the
+same chart with 2 categories versus 5 categories both come back with
+`bar.width == None`, meaning Plotly recalculates bar thickness from
+scratch on every render, purely as a function of how many categories or
+groups happen to be present and how much axis space is available. In
+practice this means the same chart can look proportionally different
+depending on the current selection: bars read as noticeably thicker when
+a population filter narrows 5 populations down to 2, or when Custom
+compares 2 cohorts instead of 4, with no consistent bar thickness across
+those states. A future update should pin a consistent visual bar width
+(e.g. a fixed `bargap`/`bargroupgap` ratio, or an explicit `width` on the
+trace scaled to the current category count) so bar thickness stays
+visually consistent as the underlying selection changes, rather than
+being left to Plotly's default per-render auto-sizing.
 
 **Bar width in the average-count and average-percentage bar charts is
 not tuned.** `_build_avg_bar_chart` in `app.py` builds every bar chart
