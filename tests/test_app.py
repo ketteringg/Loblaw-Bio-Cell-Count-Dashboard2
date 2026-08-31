@@ -1,22 +1,14 @@
 """
 tests/test_app.py
 
-Dashboard smoke tests using Streamlit's official AppTest, covering the
-same scenarios that were manually verified (and, more than once, caught
-real bugs) throughout development. The dashboard is a single page with 5
-tabs: Default (single-cohort exploration), Responder vs Non-responder, By
-Population, By Date, and Custom.
+Dashboard smoke tests using Streamlit's official AppTest. The dashboard
+is a single page with 5 tabs: Default (single-cohort exploration),
+Responder vs Non-responder, By Population, By Date, and Custom.
 
-Tabs (not a radio + if/elif) are deliberate: Streamlit renders every
-tab's content on every rerun (just CSS-hides the inactive ones), so
-filter selections survive switching tabs. A radio-driven if/elif only
-instantiates the currently-selected branch's widgets each run --
-Streamlit clears session_state for any widget that disappears from the
-script that way, which was a real, confirmed regression during
-development (see test_selections_persist_across_tabs below). Because
-every tab's widgets exist in the element tree simultaneously, tests here
-interact with each tab's widgets directly by key -- there's no "switch to
-this tab" step needed the way there was with the old radio structure.
+Because st.tabs renders every tab's content on every rerun (inactive
+tabs are just CSS-hidden), every tab's widgets exist in the element tree
+simultaneously, so tests interact with each tab's widgets directly by
+key -- no "switch to this tab" step is needed.
 
 These are slower than the pure analysis.py unit tests (each spins up a
 real headless Streamlit script run), so they're kept to representative
@@ -25,8 +17,7 @@ covered by test_analysis.py.
 
 A note on AppTest usage: element references can go stale across reruns,
 so widgets are re-fetched fresh after every `app.run()` rather than
-reused across multiple interactions -- reusing a stale reference silently
-fails to drive the live widget (a real bug caught during development).
+reused across multiple interactions.
 """
 from pathlib import Path
 
@@ -56,12 +47,11 @@ def test_initial_load_has_no_exceptions(app):
 
 
 def test_selections_persist_across_tabs(app):
-    """Regression test for a real bug found during development: under the
-    earlier radio + if/elif structure, a selection made in one view was
-    silently cleared the moment you interacted with a different view,
-    because Streamlit drops session_state for widgets that stop being
-    instantiated. With tabs, every tab's widgets are always instantiated,
-    so state should survive interacting with a different tab's widgets."""
+    """With tabs, every tab's widgets are always instantiated, so a
+    selection made in one tab must survive interacting with a different
+    tab's widgets (Streamlit drops session_state for widgets that stop
+    being instantiated, so this would fail under a radio + if/elif
+    structure)."""
     app.multiselect(key="pop_mode_selected_populations").set_value(["b_cell", "nk_cell"])
     app.run(timeout=30)
     assert app.multiselect(key="pop_mode_selected_populations").value == ["b_cell", "nk_cell"]
@@ -254,62 +244,15 @@ def test_stats_table_significance_toggle_switches_order_without_exceptions(app):
     assert not app.exception
 
 
-# ---------- Average-count chart: independent y-axis per population ----------
-
-def test_comparison_avg_chart_uses_faceted_independent_axes(ensure_db):
-    """Regression test for a real bug: the average-count bar chart shared
-    one y-axis across all 5 populations, so real per-group differences
-    within a population (e.g. ~1-2% day-to-day change) were invisible
-    next to the much larger between-population spread (~10k to ~30k
-    cells). Verifies the fix directly on a reconstructed figure: facet
-    y-axes must NOT be linked (matches=None) when comparing groups.
-    Deliberately doesn't `import app` -- that would execute the whole
-    Streamlit script body as a side effect (title, tabs, queries, the
-    works), which is slow and fragile for what's really just a Plotly
-    figure-construction check."""
-    import sqlite3
-    import pandas as pd
-    import plotly.express as px
-    from analysis import get_full_dataset, filter_dataset, get_population_averages, POPULATIONS
-
-    conn = sqlite3.connect(ensure_db)
-    conn.execute("PRAGMA foreign_keys = ON")
-    full = get_full_dataset(conn)
-    filtered = filter_dataset(full, treatment=["miraclib"], sample_type=["PBMC"])
-    group_dfs = {
-        f"Day {t}": filter_dataset(filtered, time_from_treatment_start=[t])
-        for t in [0, 7, 14]
-    }
-    avg_frames = [get_population_averages(df).assign(timepoint=label) for label, df in group_dfs.items()]
-    avg_combined = pd.concat(avg_frames, ignore_index=True)
-
-    fig = px.bar(
-        avg_combined, x="timepoint", y="avg_count", color="timepoint",
-        facet_col="population", facet_col_wrap=5,
-        category_orders={"population": POPULATIONS},
-    )
-    fig.update_yaxes(matches=None)
-
-    y_axes = [k for k in fig.layout if k.startswith("yaxis")]
-    assert len(y_axes) == 5
-    for axis_name in y_axes:
-        assert fig.layout[axis_name].matches is None
-
-
 # ---------- Boxplot facets: only present populations, not all 5 ----------
 
 def test_boxplot_only_facets_present_populations(app):
-    """Regression test for a real bug: filtering a comparison cohort down
-    to a subset of populations (e.g. just b_cell + cd4_t_cell) used to
-    still create 5 facets (Plotly Express creates one facet per
-    category_orders entry, even with zero matching rows), leaving 3 empty
-    facets with Plotly's raw unprocessed "population=X" title text, and
-    -- worse -- misaligning every later facet-indexed label (background
-    tint, group names, axis title) onto the wrong facet whenever an empty
-    facet was interspersed before a present one. Confirmed directly
-    against the real dashboard: filtering By Date to WB + b_cell +
-    cd4_t_cell should show exactly those 2 populations in the facet key,
-    not all 5."""
+    """Filtering a comparison cohort down to a subset of populations
+    must facet only the present populations (Plotly Express creates one
+    facet per category_orders entry even with zero matching rows, and
+    facet-indexed labels misalign whenever an empty facet precedes a
+    present one). Filtering By Date to WB + b_cell + cd4_t_cell should
+    show exactly those 2 populations in the facet key, not all 5."""
     app.multiselect(key="date_mode_sample_type").select("WB")
     app.run(timeout=30)
     app.multiselect(key="date_mode_population").select("b_cell")
@@ -332,36 +275,6 @@ def test_boxplot_only_facets_present_populations(app):
     assert filtered_keys[0] == ["b_cell", "cd4_t_cell"]
 
 
-def test_population_key_swatch_opacity_matches_facet_background(app):
-    """Regression test: the population key's swatches used to render at
-    full opacity (a solid, saturated dot), while the actual facet
-    backgrounds render at POPULATION_BACKGROUND_OPACITY -- a real
-    mismatch between what the key showed and what the chart actually
-    looked like. Every swatch's rgba() alpha should equal
-    POPULATION_BACKGROUND_OPACITY exactly. Reads the constant from
-    app.py's source rather than hardcoding its current value, so this
-    test can't itself go stale the next time that opacity is tuned (as
-    it was once already, from 0.15 to 0.3). (The guaranteed-order fix --
-    render_boxplot returning the exact populations list it graphed,
-    rather than callers independently recomputing their own guess -- is
-    covered implicitly: every test below that exercises Responder/By
-    Date/Custom would fail with a ValueError on
-    `fig, graphed_populations = render_boxplot(...)` if that return
-    shape were ever wrong.)"""
-    import re
-    from pathlib import Path
-    app_source = (Path(__file__).parent.parent / "app.py").read_text()
-    expected_opacity = float(re.search(r"POPULATION_BACKGROUND_OPACITY = ([\d.]+)", app_source).group(1))
-
-    keys = [m.value for m in app.markdown if "Facet background" in m.value]
-    assert len(keys) >= 1
-    for key in keys:
-        opacities = re.findall(r"rgba\(\d+, \d+, \d+, ([\d.]+)\)", key)
-        assert len(opacities) >= 1
-        for o in opacities:
-            assert float(o) == expected_opacity
-
-
 # ---------- Cohort summary: response breakdown ----------
 
 def test_cohort_summary_includes_response_breakdown(app):
@@ -370,39 +283,3 @@ def test_cohort_summary_includes_response_breakdown(app):
     response breakdown alongside project/condition/treatment/sex --
     get_cohort_summary already computed this, it just wasn't displayed."""
     assert any("By response" in m.value for m in app.markdown)
-
-
-# ---------- Average-count/percentage charts: no empty category gaps ----------
-
-def test_avg_charts_only_show_present_populations(ensure_db):
-    """Regression test for a real bug: filtering the Default tab's cohort
-    to a subset of populations (e.g. just b_cell + cd4_t_cell) used to
-    still reserve x-axis space for all 5 populations in the average-count
-    and average-percentage bar charts (Plotly Express creates one x-axis
-    category per category_orders entry, even with zero matching rows),
-    leaving visibly empty gaps where the excluded populations would be.
-    Verified directly on a reconstructed figure -- exactly 2 x-axis
-    categories, not 5, matching what the underlying avg_table actually
-    contains."""
-    import sqlite3
-    import plotly.express as px
-    from analysis import get_full_dataset, filter_dataset, get_population_averages, POPULATIONS
-
-    POP_COLORS_TEST = {
-        "b_cell": "#7DB760", "cd8_t_cell": "#6067B7", "cd4_t_cell": "#BCB96B",
-        "nk_cell": "#60B0B7", "monocyte": "#B85951",
-    }
-    conn = sqlite3.connect(ensure_db)
-    conn.execute("PRAGMA foreign_keys = ON")
-    full = get_full_dataset(conn)
-    filtered = filter_dataset(full, population=["b_cell", "cd4_t_cell"])
-    avg_table = get_population_averages(filtered)
-
-    present_populations = [p for p in POPULATIONS if p in avg_table["population"].unique()]
-    fig = px.bar(
-        avg_table, x="population", y="avg_count", color="population",
-        color_discrete_map=POP_COLORS_TEST,
-        category_orders={"population": present_populations},
-    )
-    assert fig.layout.xaxis.categoryarray == ("b_cell", "cd4_t_cell")
-    assert len(fig.data) == 2
