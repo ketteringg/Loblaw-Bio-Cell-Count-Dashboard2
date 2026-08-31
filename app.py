@@ -21,11 +21,9 @@ Run with:
     streamlit run app.py
 """
 from pathlib import Path
-import hashlib
 
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import sqlite3
 import streamlit as st
 
@@ -201,20 +199,6 @@ PLOTLY_CONFIG = {
     "displaylogo": False,
     "toImageButtonOptions": {"format": "png", "scale": 2},
 }
-CHART_LAYOUT_VERSION = "compact-populations-v4"
-
-
-def display_chart(fig, key: str):
-    """Mount a fresh chart when its displayed data or layout changes."""
-    # A Python figure check cannot detect a retained frontend figure.
-    # Key the surrounding container as well as the chart by its content
-    # so a new cohort cannot inherit the previous cohort's axes/traces.
-    content_hash = hashlib.sha256(fig.to_json().encode("utf-8")).hexdigest()[:16]
-    revision = f"{CHART_LAYOUT_VERSION}_{content_hash}"
-    with st.container(key=f"{key}_frame_{revision}"):
-        st.plotly_chart(
-            fig, width="stretch", key=f"{key}_{revision}", config=PLOTLY_CONFIG,
-        )
 
 
 # ---------- connection + caching ----------
@@ -281,6 +265,14 @@ def render_boxplot(
     -- which Plotly specifically defines as below gridlines (not just
     below traces), so gridlines and the box traces themselves both still
     render on top regardless of the background's opacity.
+
+    Returns (fig, present_populations): present_populations is the exact,
+    already-computed list of populations this figure actually faceted,
+    in the exact order they were graphed. Callers should pass this
+    directly to render_population_key rather than recomputing their own
+    guess at the same list -- two independent computations of "which
+    populations, in what order" can drift apart if either one's filtering
+    logic changes later, even though they happen to agree today.
     """
     groups = group_order or sorted(comparison_df[x_col].dropna().unique())
     default_colors = ["#6B7280", "#9CA3AF", "#D1D5DB", "#4B5563", "#111827", "#78716C"]
@@ -428,7 +420,7 @@ def render_boxplot(
             lambda a, pop=pop, p_text=p_text: a.update(text=p_text)
             if a.text.split("=")[-1] == pop else a
         )
-    return fig
+    return fig, present_populations
 
 
 def render_single_population_boxplot(comparison_df: pd.DataFrame):
@@ -467,19 +459,28 @@ def render_population_key(populations: list[str]):
     never overlap the plot area, unlike an in-figure legend, which can
     crowd or overlap the chart on narrow viewports or with many entries.
 
-    `populations` is deduplicated here, preserving canonical order --
-    callers typically pass results["population"].tolist() directly
-    (compare_n_groups/compare_populations_paired output has one row per
-    population x group-pair, so the same population repeats once per
-    pair), and without deduplication the key showed the same population
-    multiple times (and in whatever order those repeats happened to
-    appear), confirmed directly against a real 2-population/3-timepoint
-    comparison."""
+    `populations` should be the exact list render_boxplot/
+    render_n_group_boxplot returned as their second value (the
+    present_populations they actually faceted, already in graphed order)
+    -- not independently recomputed from a stats table. Passing
+    results["population"].tolist() used to work by coincidence (both
+    computations happened to apply the same canonical-order filter), but
+    that's fragile: two independent computations of "which populations,
+    in what order" can silently drift apart if either one's logic changes
+    later. This function still deduplicates and canonical-orders its
+    input defensively, but the caller contract is now "pass what was
+    actually graphed."
+
+    Swatch color uses POPULATION_BACKGROUND_OPACITY, matching the actual
+    facet background opacity exactly -- rather than a solid, fully opaque
+    dot, which would show a noticeably more saturated color than what the
+    chart itself displays."""
     seen = [p for p in POPULATIONS if p in populations]
     swatches = "".join(
         f"<span style='display:inline-flex; align-items:center; margin-right:14px;'>"
         f"<span style='display:inline-block; width:10px; height:10px; "
-        f"border-radius:50%; background:{POP_COLORS[pop]}; margin-right:5px;'></span>"
+        f"border-radius:50%; background:{hex_to_rgba(POP_COLORS[pop], POPULATION_BACKGROUND_OPACITY)}; "
+        f"margin-right:5px;'></span>"
         f"<span style='font-size:12px; color:#4B5563;'>{pop}</span></span>"
         for pop in seen if pop in POP_COLORS
     )
@@ -503,38 +504,10 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
     1-2%), so a shared y-axis makes real, correctly-computed differences
     visually indistinguishable -- verified directly against real data
     (per-day averages genuinely differ, just by a small amount) before
-    concluding this was a display problem, not a computation bug.
-    Returns None when there are no observed values to plot."""
-    if avg_table.empty:
-        return None
-
-    # Guard at the chart boundary as well as in the aggregation layer:
-    # categorical groupby results may contain unused levels with NaN
-    # averages and n_samples == 0. They must not reserve a bar or facet.
-    required = list(dict.fromkeys(["population", color_col, y_col]))
-    chart_data = avg_table.dropna(subset=required).copy()
-    if "n_samples" in chart_data.columns:
-        chart_data = chart_data.loc[chart_data["n_samples"] > 0].copy()
-    if chart_data.empty:
-        return None
-
-    # Pass observed values, without pandas' retained category metadata,
-    # to Plotly. Copy orders so neither the caller nor the other chart
-    # can reintroduce categories absent from this chart's actual data.
-    for column in dict.fromkeys(["population", color_col]):
-        if isinstance(chart_data[column].dtype, pd.CategoricalDtype):
-            chart_data[column] = chart_data[column].astype(object)
-    category_orders = {
-        column: [value for value in order if value in chart_data[column].unique()]
-        for column, order in category_orders.items()
-        if column in chart_data.columns
-    }
-    present_populations = [p for p in POPULATIONS if p in chart_data["population"].unique()]
-    category_orders["population"] = present_populations
-
+    concluding this was a display problem, not a computation bug."""
     if is_comparison:
         fig = px.bar(
-            chart_data, x=color_col, y=y_col, color=color_col,
+            avg_table, x=color_col, y=y_col, color=color_col,
             color_discrete_map=color_map, facet_col="population", facet_col_wrap=5,
             title=title, labels={y_col: y_label}, category_orders=category_orders,
         )
@@ -547,30 +520,16 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
             trace.marker.line.color = trace.marker.color
         fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
     else:
-        # A single trace at consecutive numeric positions avoids both
-        # categorical-axis bookkeeping and empty slots between color
-        # traces. Names are explicit tick labels and hover data only.
-        chart_data = chart_data.set_index("population").loc[present_populations].reset_index()
-        positions = list(range(len(chart_data)))
-        labels = chart_data["population"].tolist()
-        fig = go.Figure(go.Bar(
-            x=positions, y=chart_data[y_col].tolist(), width=0.7,
-            marker=dict(
-                color=[color_map[population] for population in labels],
-                opacity=POPULATION_BACKGROUND_OPACITY,
-            ),
-            customdata=labels,
-            hovertemplate="population=%{customdata}<br>" + y_label + "=%{y}<extra></extra>",
-        ))
-        fig.update_layout(title=title, showlegend=False)
-        fig.update_xaxes(
-            type="linear", title_text="population", tickmode="array",
-            tickvals=positions, ticktext=labels,
-            range=[-0.5, len(positions) - 0.5], autorange=False,
+        fig = px.bar(
+            avg_table, x="population", y=y_col, color=color_col,
+            color_discrete_map=color_map, barmode="group",
+            title=title, labels={y_col: y_label}, category_orders=category_orders,
         )
-        fig.update_yaxes(title_text=y_label, gridcolor="#000000", gridwidth=0.5)
+        fig.update_yaxes(gridcolor="#000000", gridwidth=0.5)
         if yaxis_tickformat:
             fig.update_yaxes(tickformat=yaxis_tickformat)
+        fig.update_layout(showlegend=False)
+        fig.update_traces(marker_opacity=POPULATION_BACKGROUND_OPACITY)
     return fig
 
 
@@ -596,51 +555,50 @@ def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, 
     "Responder" here (while the distribution boxplot elsewhere used an
     explicit Responder-first order) -- a real inconsistency, not a
     stylistic choice, caught by comparing the two side by side."""
-    # Keep canonical ordering without reserving axis categories or facets
-    # for populations excluded by the cohort filters (including gaps
-    # between selected populations, such as b_cell + cd4_t_cell).
+    # Uses only the populations actually present in avg_table, not the
+    # full POPULATIONS constant -- the same bug fixed earlier for
+    # render_boxplot's facets applies identically here: Plotly Express
+    # creates one x-axis category per category_orders entry even with
+    # zero matching rows, so a population-filtered cohort (e.g. just
+    # b_cell + cd4_t_cell selected) reserved x-axis space for all 5
+    # populations, leaving empty gaps where cd8_t_cell/nk_cell/monocyte
+    # would be -- confirmed directly against a real filtered chart.
     present_populations = [p for p in POPULATIONS if p in avg_table["population"].unique()]
     category_orders = {"population": present_populations}
     if group_order:
         category_orders[color_col] = group_order
     is_comparison = color_col != "population"
 
-    fig_count = _build_avg_bar_chart(
-        avg_table, "avg_count", "avg. cell count", "Average number of cells",
-        color_col, color_map, category_orders, is_comparison, yaxis_tickformat=",",
-    )
-    fig_pct = _build_avg_bar_chart(
-        avg_table, "avg_percentage", "avg. % of total cells", "Average relative frequency",
-        color_col, color_map, category_orders, is_comparison,
-    )
-    charts = [
-        (fig, key) for fig, key in [
-            (fig_count, f"{key_prefix}_avg_count_chart"),
-            (fig_pct, f"{key_prefix}_avg_pct_chart"),
-        ] if fig is not None
-    ]
-    if not charts:
-        st.info("No data available for this cohort.")
-        return
-    for column, (fig, key) in zip(st.columns(len(charts)), charts):
-        with column:
-            display_chart(fig, key)
+    chart_col1, chart_col2 = st.columns(2)
+    with chart_col1:
+        fig_count = _build_avg_bar_chart(
+            avg_table, "avg_count", "avg. cell count", "Average number of cells",
+            color_col, color_map, category_orders, is_comparison, yaxis_tickformat=",",
+        )
+        st.plotly_chart(fig_count, width='stretch', key=f"{key_prefix}_avg_count_chart")
+    with chart_col2:
+        fig_pct = _build_avg_bar_chart(
+            avg_table, "avg_percentage", "avg. % of total cells", "Average relative frequency",
+            color_col, color_map, category_orders, is_comparison,
+        )
+        st.plotly_chart(fig_pct, width='stretch', key=f"{key_prefix}_avg_pct_chart")
 
 
 def render_cohort_summary_block(df: pd.DataFrame):
     """Cohort summary card: sample/subject counts + breakdowns by
-    project/condition/treatment/sex. Shared across every single-cohort
-    tab (Default, Responder vs Non-responder, By Population, By Date) so
-    this section always appears in the same place with the same shape --
-    Custom mode uses combined_cohort_breakdown_table instead, since it
-    has multiple independent cohorts rather than one."""
+    project/condition/treatment/response/sex. Shared across every
+    single-cohort tab (Default, Responder vs Non-responder, By
+    Population, By Date) so this section always appears in the same
+    place with the same shape -- Custom mode uses
+    combined_cohort_breakdown_table instead, since it has multiple
+    independent cohorts rather than one."""
     summary = get_cohort_summary(df)
     with st.container(border=True):
         c1, c2 = st.columns(2)
         c1.metric("Samples in cohort", f"{summary['n_samples']:,}")
         c2.metric("Subjects in cohort", f"{summary['n_subjects']:,}")
 
-        b1, b2, b3, b4 = st.columns(4)
+        b1, b2, b3, b4, b5 = st.columns(5)
         with b1:
             st.write("**By project**")
             st.dataframe(summary["samples_per_project"], hide_index=True, width='stretch')
@@ -651,6 +609,9 @@ def render_cohort_summary_block(df: pd.DataFrame):
             st.write("**By treatment**")
             st.dataframe(summary["subjects_by_treatment"], hide_index=True, width='stretch')
         with b4:
+            st.write("**By response**")
+            st.dataframe(summary["subjects_by_response"], hide_index=True, width='stretch')
+        with b5:
             st.write("**By sex**")
             st.dataframe(summary["subjects_by_sex"], hide_index=True, width='stretch')
 
@@ -818,7 +779,8 @@ def render_n_group_boxplot(group_dfs: dict, stats_df: pd.DataFrame, colors: list
     """Boxplot for 2 or more arbitrary groups, faceted by population --
     generalizes the old render_cohort_comparison_boxplot (which was fixed
     at exactly 2 cohorts) to any number of groups via render_boxplot's own
-    N-group support."""
+    N-group support. Returns (fig, present_populations), same as
+    render_boxplot -- this just forwards it."""
     frames = []
     for label, df in group_dfs.items():
         d = df.copy()
@@ -1029,7 +991,6 @@ st.sidebar.write(f"{full['subject_id'].nunique():,} subjects")
 st.sidebar.write(f"{full['sample'].nunique():,} samples")
 st.sidebar.write(f"{full['project'].nunique()} projects")
 st.sidebar.write(f"{len(POPULATIONS)} cell populations tracked")
-st.sidebar.caption(f"Chart layout: {CHART_LAYOUT_VERSION}")
 
 # ---------- header ----------
 st.title("Loblaw Bio")
@@ -1093,7 +1054,7 @@ with tab_default:
                 "against each other."
             )
             fig = render_single_population_boxplot(filtered)
-            display_chart(fig, "default_boxplot")
+            st.plotly_chart(fig, width='stretch', key="default_boxplot", config=PLOTLY_CONFIG)
 
 
 # ---------- Responder vs Non-responder ----------
@@ -1165,12 +1126,12 @@ with tab_resp:
             st.write("")
             with st.container(border=True):
                 st.write("**Distribution comparison**")
-                fig = render_boxplot(
+                fig, graphed_populations = render_boxplot(
                     filtered, results, group_order=["Responder", "Non-responder"],
                     group_colors=[RESPONSE_COLORS["Responder"], RESPONSE_COLORS["Non-responder"]],
                 )
-                display_chart(fig, "resp_boxplot")
-                render_population_key(results["population"].tolist())
+                st.plotly_chart(fig, width='stretch', key="resp_boxplot", config=PLOTLY_CONFIG)
+                render_population_key(graphed_populations)
 
             st.write("")
             with st.container(border=True):
@@ -1240,7 +1201,7 @@ with tab_pop:
                 with st.container(border=True):
                     st.write("**Population distributions**")
                     fig = render_population_comparison_boxplot(filtered, selected_pops)
-                    display_chart(fig, "pop_mode_boxplot")
+                    st.plotly_chart(fig, width='stretch', key="pop_mode_boxplot", config=PLOTLY_CONFIG)
 
                 st.write("")
                 with st.container(border=True):
@@ -1333,11 +1294,11 @@ with tab_date:
                 st.write("")
                 with st.container(border=True):
                     st.write("**Distribution comparison**")
-                    fig = render_n_group_boxplot(
+                    fig, graphed_populations = render_n_group_boxplot(
                         group_dfs, results, list(date_color_map.values()), x_label="timepoint",
                     )
-                    display_chart(fig, "date_mode_boxplot")
-                    render_population_key(results["population"].tolist())
+                    st.plotly_chart(fig, width='stretch', key="date_mode_boxplot", config=PLOTLY_CONFIG)
+                    render_population_key(graphed_populations)
 
                 st.write("")
                 with st.container(border=True):
@@ -1394,7 +1355,7 @@ with tab_custom:
                 m1.metric(f"{label}: samples", f"{df['sample'].nunique():,}")
                 m2.metric(f"{label}: subjects", f"{df['subject_id'].nunique():,}")
 
-            b1, b2, b3, b4 = st.columns(4)
+            b1, b2, b3, b4, b5 = st.columns(5)
             with b1:
                 st.write("**By project**")
                 st.dataframe(combined_cohort_breakdown_table(cohort_dfs_by_label, "samples_per_project"), hide_index=True, width='stretch')
@@ -1405,6 +1366,9 @@ with tab_custom:
                 st.write("**By treatment**")
                 st.dataframe(combined_cohort_breakdown_table(cohort_dfs_by_label, "subjects_by_treatment"), hide_index=True, width='stretch')
             with b4:
+                st.write("**By response**")
+                st.dataframe(combined_cohort_breakdown_table(cohort_dfs_by_label, "subjects_by_response"), hide_index=True, width='stretch')
+            with b5:
                 st.write("**By sex**")
                 st.dataframe(combined_cohort_breakdown_table(cohort_dfs_by_label, "subjects_by_sex"), hide_index=True, width='stretch')
 
@@ -1452,9 +1416,9 @@ with tab_custom:
             st.write("")
             with st.container(border=True):
                 st.write("**Distribution comparison**")
-                fig = render_n_group_boxplot(cohort_dfs_by_label, results, colors_in_order, x_label="cohort")
-                display_chart(fig, "custom_boxplot")
-                render_population_key(results["population"].tolist())
+                fig, graphed_populations = render_n_group_boxplot(cohort_dfs_by_label, results, colors_in_order, x_label="cohort")
+                st.plotly_chart(fig, width='stretch', key="custom_boxplot", config=PLOTLY_CONFIG)
+                render_population_key(graphed_populations)
 
             st.write("")
             with st.container(border=True):
