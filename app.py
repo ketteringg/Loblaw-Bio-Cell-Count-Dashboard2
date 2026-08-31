@@ -349,7 +349,7 @@ def render_boxplot(
     # zero-line was stacking directly on top of the regular gridline at
     # that same position, rendering as a visibly thicker line there than
     # at any other tick. Tick labels are shown on every facet (not just the
-    # first), even though the scale is shared, per explicit request.
+    # first), even though the scale is shared.
     fig.update_yaxes(
         matches="y", range=y_range,
         gridcolor="#000000", gridwidth=0.5,
