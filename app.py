@@ -90,20 +90,29 @@ N_GROUP_COLOR_SEQUENCE = [
 ]
 
 # Boxplot fill opacity (fill only -- outline/median stay fully opaque, see
-# render_boxplot). Slightly less than fully opaque, so the population
-# background tint underneath shows through a little.
-GROUP_FILL_ALPHA = 0.85
+# render_boxplot). Moderate rather than near-solid: 0.85 read as too heavy/
+# opaque against the population background tint underneath -- this value
+# still reads clearly as "filled," just without dominating the chart.
+GROUP_FILL_ALPHA = 0.55
 
-# Population background tint opacity (facet backgrounds in render_boxplot).
-# Kept low: at full opacity, the strongly saturated, differently-hued
-# backgrounds behind each facet created a real optical effect where
-# identical gridlines appeared to have different thickness depending on
-# which background they crossed -- confirmed the gridlines themselves
-# were byte-for-byte identical across every facet (same width, color,
-# range, and auto-computed tick spacing), so the apparent
-# inconsistency was the background contrast, not the lines. A much
-# lighter tint (same hue, far less opaque) avoids that effect.
-POPULATION_BACKGROUND_OPACITY = 0.15
+# Population background tint opacity (facet backgrounds in render_boxplot,
+# population-colored table cells, population-colored bar fills, and the
+# population key swatches -- all deliberately share this one constant so
+# they stay visually consistent with each other).
+#
+# Moderate rather than very light: 0.15 read as too faint, especially as a
+# bar-chart fill (bars need to be clearly visible as the primary data
+# there, not just a background wash). Kept well short of full opacity,
+# though, because of documented history: at full opacity, the strongly
+# saturated, differently-hued backgrounds behind each boxplot facet
+# created a real optical effect where identical gridlines appeared to
+# have different thickness depending on which background they crossed
+# (confirmed the gridlines themselves were byte-for-byte identical across
+# every facet -- same width, color, range, tick spacing -- so the
+# apparent inconsistency was purely the background contrast). That issue
+# was specifically observed near full opacity, not at this more moderate
+# level, but the margin is deliberate rather than assumed safe.
+POPULATION_BACKGROUND_OPACITY = 0.3
 
 CUSTOM_CSS = """
 <style>
@@ -261,10 +270,10 @@ def render_boxplot(
     line/marker stay solid hex) so only the fill -- not the outline or
     median line -- is affected. Each facet's background is tinted with
     that population's own color (same hex value used everywhere else),
-    at a low opacity (POPULATION_BACKGROUND_OPACITY), using layer="below"
-    -- which Plotly specifically defines as below gridlines (not just
-    below traces), so gridlines and the box traces themselves both still
-    render on top regardless of the background's opacity.
+    at a moderate opacity (POPULATION_BACKGROUND_OPACITY), using
+    layer="below" -- which Plotly specifically defines as below gridlines
+    (not just below traces), so gridlines and the box traces themselves
+    both still render on top regardless of the background's opacity.
 
     Returns (fig, present_populations): present_populations is the exact,
     already-computed list of populations this figure actually faceted,
@@ -351,9 +360,9 @@ def render_boxplot(
     # graphical elements), while pure black is the only candidate tested
     # that clears 3:1 against every population color (worst case 4.12:1,
     # on cd8_t_cell's blue-violet background). Now that the background
-    # opacity is much lower (POPULATION_BACKGROUND_OPACITY), contrast is
-    # even better than that worst-case check, so black remains a safe
-    # choice. zeroline is explicitly disabled: the y-axis range's lower
+    # opacity is well under full opacity (POPULATION_BACKGROUND_OPACITY =
+    # 0.3), contrast is even better than that worst-case check, so black
+    # remains a safe choice. zeroline is explicitly disabled: the y-axis range's lower
     # bound lands exactly on 0 (see y_range above), so Plotly's separate
     # zero-line was stacking directly on top of the regular gridline at
     # that same position, rendering as a visibly thicker line there than
@@ -496,15 +505,26 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
     """Builds one average-count or average-percentage bar chart. When
     is_comparison is True (color_col is a comparison group, not
     population), facets by population instead of putting population on
-    the shared x-axis -- deliberately WITHOUT matches='y' (unlike the
+    the shared x-axis, deliberately WITHOUT matches='y' (unlike the
     boxplot), so each population gets its own independently-scaled
     y-axis. This matters concretely: between-population variation (e.g.
     b_cell ~10k cells vs cd4_t_cell ~30k) is far larger than
     within-population variation across comparison groups (often under
     1-2%), so a shared y-axis makes real, correctly-computed differences
-    visually indistinguishable -- verified directly against real data
+    visually indistinguishable. Verified directly against real data
     (per-day averages genuinely differ, just by a small amount) before
-    concluding this was a display problem, not a computation bug."""
+    concluding this was a display problem, not a computation bug.
+
+    Both branches use marker_opacity=GROUP_FILL_ALPHA, the same value
+    the boxplot fills use (see render_boxplot), so the same population
+    or group colors read at the same visual intensity whether they show
+    up in a bar or a box. Plotly's Bar trace has a single marker.opacity
+    that fades the fill and the outline together (unlike Box, which has
+    a separate fillcolor property); the matching-color outline trick
+    here still applies at that same faded opacity rather than staying
+    fully solid, which is a minor difference from the boxplot's
+    darkened, fully opaque outline, but keeps this change scoped to
+    opacity specifically rather than also changing the outline's color."""
     if is_comparison:
         fig = px.bar(
             avg_table, x=color_col, y=y_col, color=color_col,
@@ -515,7 +535,7 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
         if yaxis_tickformat:
             fig.update_yaxes(tickformat=yaxis_tickformat)
         fig.update_xaxes(showticklabels=False)
-        fig.update_traces(marker_line_width=1.5)
+        fig.update_traces(marker_line_width=1.5, marker_opacity=GROUP_FILL_ALPHA)
         for trace in fig.data:
             trace.marker.line.color = trace.marker.color
         fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
@@ -529,34 +549,32 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
         if yaxis_tickformat:
             fig.update_yaxes(tickformat=yaxis_tickformat)
         fig.update_layout(showlegend=False)
-        fig.update_traces(marker_opacity=POPULATION_BACKGROUND_OPACITY)
+        fig.update_traces(marker_opacity=GROUP_FILL_ALPHA)
     return fig
 
 
 def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, key_prefix: str, group_order: list | None = None):
     """Average cell count / average percentage bar charts, colored
     consistently by whatever column is being compared (population, or
-    response, or cohort, or timepoint). Response/cohort/timepoint bars
-    are solid, fully opaque fills with a matching-color outline for crisp
-    edges (no hatch pattern: an earlier version used pattern_shape as a
-    colorblind-safety measure, but Plotly's default pattern assigns the
-    *first* category an empty/solid pattern and the *second* a
-    diagonal-hatch fill, which reads as "not fully filled in" rather than
-    as a deliberate texture -- removed in favor of just keeping the
-    Okabe-Ito color choices themselves colorblind-safe, which they
-    already are). Population bars use POPULATION_BACKGROUND_OPACITY, the
-    same opacity value used everywhere else population color appears
-    (boxplot facet backgrounds, population table cells), for consistency
-    across the dashboard.
+    response, or cohort, or timepoint). All bars, whether colored by
+    population or by a comparison group, use marker_opacity=GROUP_FILL_ALPHA:
+    the same fill opacity the boxplot uses, so the same color reads at
+    the same visual intensity in both chart types (no hatch pattern: an
+    earlier version used pattern_shape as a colorblind safety measure,
+    but Plotly's default pattern assigns the *first* category an
+    empty/solid pattern and the *second* a diagonal-hatch fill, which
+    reads as "not fully filled in" rather than as a deliberate texture,
+    removed in favor of just keeping the Okabe-Ito color choices
+    themselves colorblind-safe, which they already are).
 
     group_order pins the legend/bar order for color_col explicitly. This
     matters: without it, Plotly Express sorts a string column's values
     alphabetically by default, which silently put "Non-responder" before
     "Responder" here (while the distribution boxplot elsewhere used an
-    explicit Responder-first order) -- a real inconsistency, not a
+    explicit Responder-first order), a real inconsistency, not a
     stylistic choice, caught by comparing the two side by side."""
     # Uses only the populations actually present in avg_table, not the
-    # full POPULATIONS constant -- the same bug fixed earlier for
+    # full POPULATIONS constant. The same bug fixed earlier for
     # render_boxplot's facets applies identically here: Plotly Express
     # creates one x-axis category per category_orders entry even with
     # zero matching rows, so a population-filtered cohort (e.g. just
