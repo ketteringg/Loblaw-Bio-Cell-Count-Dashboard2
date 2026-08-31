@@ -400,7 +400,9 @@ def get_population_averages(df: pd.DataFrame, split_by_response: bool = False) -
         group_cols = ["population", "response_label"]
 
     out = (
-        working.groupby(group_cols)
+        # Categorical columns can retain levels removed by filtering.
+        # Do not turn those unused levels into zero-sample summary rows.
+        working.groupby(group_cols, observed=True)
         .agg(
             avg_count=("count", "mean"),
             avg_percentage=("percentage", "mean"),
@@ -413,7 +415,9 @@ def get_population_averages(df: pd.DataFrame, split_by_response: bool = False) -
 
     # Keep population in the canonical b_cell/cd8/cd4/nk/monocyte order
     # rather than whatever order groupby happens to produce.
-    out["population"] = pd.Categorical(out["population"], categories=POPULATIONS, ordered=True)
+    out["population"] = pd.Categorical(
+        out["population"], categories=POPULATIONS, ordered=True,
+    ).remove_unused_categories()
     sort_cols = ["population", "response_label"] if split_by_response else ["population"]
     return out.sort_values(sort_cols).reset_index(drop=True)
 
