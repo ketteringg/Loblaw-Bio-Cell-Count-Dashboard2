@@ -8,8 +8,7 @@ __pycache__/
 venv/
 env/
 
-# Streamlit local cache/logs (not .streamlit/config.toml, which is the
-# committed theme file)
+# Streamlit local secrets (config.toml is the committed theme, stays tracked)
 .streamlit/secrets.toml
 
 # OS-specific
@@ -25,8 +24,6 @@ Thumbs.db
 .coverage
 htmlcov/
 
-# Generated build artifact, quickly and deterministically rebuilt from
-# cell-count.csv via `python load_data.py`. The part2/3/4 output files
-# ARE committed (the assignment asks for generated outputs); this
-# intermediate .db is not.
+# Intermediate build artifact, rebuilt from cell-count.csv by load_data.py
+# (the part2-4 output files are committed; this is not)
 cell_counts.db
