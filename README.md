@@ -14,13 +14,13 @@ Quickstart below.
 ## Quickstart (GitHub Codespaces)
 
 ```bash
-make setup       # pip install -r requirements.txt
+make setup       # installs dependencies (uses uv if available, falls back to pip)
 make pipeline    # builds cell_counts.db, then generates every Part 2-4 output file/plot
-make dashboard   # streamlit run app.py -- launches the interactive dashboard
-make test        # pip install -r requirements-dev.txt && pytest -v
+make dashboard   # streamlit run app.py, launches the interactive dashboard
+make test        # installs dev dependencies, then runs pytest
 ```
 
-Equivalent plain commands, if you'd rather not use `make`:
+Equivalent plain commands, if you would rather not use `make`:
 
 ```bash
 pip install -r requirements.txt
@@ -30,14 +30,14 @@ streamlit run app.py
 ```
 
 `make pipeline` runs `load_data.py` (builds `cell_counts.db` from
-`cell-count.csv`) followed by `generate_outputs.py` (writes
-`frequency_table.csv`, `stats_results.csv`, `boxplot_responders.png`,
-`baseline_melanoma_samples.csv`, and `part4_summary.txt` -- see
-"Repository contents" below for what each one is). You don't strictly have
-to run either first before the dashboard, though: `app.py` self-initializes
-the database on its own if it's missing (see "Self-initializing database"
-below), which is what makes the Streamlit Community Cloud deployment work
-without a separate setup step.
+`cell-count.csv`) followed by `generate_outputs.py`, which writes
+`part2_frequency_table.csv`, `part3_stats_results.csv`,
+`part3_boxplot_responders.png`, `part4_baseline_melanoma_samples.csv`, and
+`part4_summary.txt`. See "Repository contents" below for what each one is.
+You do not strictly have to run either first before the dashboard, though:
+`app.py` self-initializes the database on its own if it is missing (see
+"Self-initializing database" below), which is what makes the Streamlit
+Community Cloud deployment work without a separate setup step.
 
 Tested with Python 3.12 and the exact package versions pinned in
 `requirements.txt`.
@@ -64,8 +64,8 @@ make test
 
 runs the full test suite (`tests/test_analysis.py` and `tests/test_app.py`,
 78 tests as of writing) via `pytest`. This also runs automatically on every
-push and pull request via GitHub Actions (`.github/workflows/tests.yml`) --
-check the "Actions" tab on the repo, or the checkmark next to any commit,
+push and pull request via GitHub Actions (`.github/workflows/tests.yml`).
+Check the "Actions" tab on the repo, or the checkmark next to any commit,
 to see the result without running anything locally.
 
 `test_analysis.py` covers the query/analysis layer directly: known row
@@ -81,8 +81,8 @@ validation logic (both the hard failures and the soft warnings).
 and check for a handful of representative scenarios per tab (clean
 load, the small-n warning path, the reset-filters button, each comparison
 mode, mode switching). These are the same checks that were run manually
-throughout development -- more than one caught a real bug before it
-shipped -- now made permanent.
+throughout development. More than one caught a real bug before it
+shipped, now made permanent.
 
 ## Code structure and why
 
@@ -94,7 +94,7 @@ Three layers, each with one job:
   CSV.
 - **`analysis.py`** owns every query and statistical computation, and knows
   nothing about Streamlit or the dashboard. It's plain functions that take a
-  connection or a DataFrame and return a DataFrame -- this is what makes it
+  connection or a DataFrame and return a DataFrame. That is what makes it
   possible to unit-test the actual statistics (`tests/test_analysis.py`)
   without spinning up the UI, and what `generate_outputs.py` calls directly
   to produce the graded Part 2-4 files without going through the dashboard
@@ -103,34 +103,37 @@ Three layers, each with one job:
   renders the results. It's deliberately general-purpose (any cohort, any
   comparison, via filters) rather than having one fixed view per assignment
   part, because Parts 2-4 turn out to be special cases of "filter a cohort,
-  then optionally compare groups within it" -- the thing the dashboard
+  then optionally compare groups within it," the thing the dashboard
   already does for anything.
 
 That separation is also why there's a **`generate_outputs.py`**, distinct
-from the dashboard: the assignment's outputs need to exist as concrete
+from the dashboard. The assignment's outputs need to exist as concrete
 files a grader can open without clicking through the UI to reconstruct the
 exact required filter combination, so this script calls the same
 `analysis.py` functions directly and writes them to disk. Both `app.py` and
 `generate_outputs.py` are two different callers of the same underlying
-logic, not two separately-maintained copies of it -- a change to
+logic, not two separately maintained copies of it: a change to
 `analysis.py`'s statistics changes both consistently.
 
 ## Repository contents
 
 | File | Purpose |
 |---|---|
-| `Makefile` | `make setup` / `make pipeline` / `make dashboard` / `make test` -- `pipeline` builds the database and generates every required Part 2-4 output file/plot, in that order, with no manual steps in between |
+| `Makefile` | `make setup` / `make pipeline` / `make dashboard` / `make test`. `pipeline` builds the database and generates every required Part 2-4 output file/plot, in that order, with no manual steps in between |
 | `.streamlit/config.toml` | Dashboard theme (colors, font) |
 | `.github/workflows/tests.yml` | Runs the test suite on every push/PR |
 | `.gitignore` | Editor/OS/venv ignores, plus every file `make pipeline` generates (see below) |
 | `schema.sql` | Relational schema (3 tables) |
 | `load_data.py` | Validates `cell-count.csv`, builds `cell_counts.db` |
-| `analysis.py` | Query + analysis functions (framework-agnostic, no Streamlit) |
+| `analysis.py` | Query + analysis functions (framework agnostic, no Streamlit) |
 | `generate_outputs.py` | Produces the required Part 2-4 files/plot by calling `analysis.py` directly (see "Code structure and why" above) |
 | `app.py` | Streamlit dashboard: 5 tabs, single-cohort exploration plus 4 comparison modes |
 | `tests/` | pytest suite (`test_analysis.py`, `test_app.py`, `conftest.py`) |
 | `cell-count.csv` | Source data |
-| `cell_counts.db`, `frequency_table.csv`, `stats_results.csv`, `boxplot_responders.png`, `baseline_melanoma_samples.csv`, `part4_summary.txt` | All generated by `make pipeline` -- **none of these are committed** (gitignored; always rebuilt from `cell-count.csv` + the current code, so a committed copy can never silently drift out of sync with either) |
+| `cell_counts.db` | Generated by `make pipeline`. Gitignored, always rebuilt from `cell-count.csv`, so a committed copy can never silently drift out of sync with either the source data or the code |
+| `part2_frequency_table.csv` | Part 2's required output, generated by `make pipeline` |
+| `part3_stats_results.csv`, `part3_boxplot_responders.png` | Part 3's required outputs, generated by `make pipeline` |
+| `part4_baseline_melanoma_samples.csv`, `part4_summary.txt` | Part 4's required outputs, generated by `make pipeline` |
 | `requirements.txt` | Pinned runtime dependencies |
 | `requirements-dev.txt` | Runtime dependencies plus `pytest` |
 
@@ -158,19 +161,19 @@ below for how this gets normalized into `subjects` / `samples` /
 
 ## Dashboard architecture: one page, 5 tabs, each independently filterable
 
-Earlier versions of this dashboard used tabs differently -- first a fixed
+Earlier versions of this dashboard used tabs differently. First a fixed
 tab per Part 2/3/4 cohort, then two general-purpose tabs (Custom Explorer
 and Cohort Comparison), then briefly a single page with a radio-button
 mode selector instead of tabs at all. Each was replaced for a different
 reason: the fixed tabs duplicated what a more general view could already
 show; the two-tab version couldn't express every comparison someone might
-want; and the radio-selector version had a real bug -- switching away
+want; and the radio-selector version had a real bug: switching away
 from a view and back silently cleared whatever filters had been set,
 because Streamlit only instantiates the currently-selected branch's
 widgets under an `if/elif`, and drops `session_state` for any widget that
 stops being instantiated. **Tabs render every tab's content on every
 rerun** (just CSS-hiding the inactive ones), so widget state survives
-switching tabs for free -- confirmed directly: selecting specific
+switching tabs for free. Confirmed directly: selecting specific
 populations in the By Population tab, then interacting with a completely
 different tab, no longer clears that selection (`test_app.py`'s
 `test_selections_persist_across_tabs`).
@@ -178,22 +181,22 @@ different tab, no longer clears that selection (`test_app.py`'s
 The dashboard is 5 tabs: **Default**, **Responder vs Non-responder**, **By
 Population**, **By Date**, and **Custom**. Default is single-cohort
 exploration (cohort summary, average cell counts, the frequency table,
-and a per-population distribution boxplot -- no comparison). The other
+and a per-population distribution boxplot, with no comparison). The other
 four each compare 2 or more groups against each other, split a different
 way:
 
-- **Responder vs Non-responder** -- always exactly 2 groups, the
+- **Responder vs Non-responder**: always exactly 2 groups, the
   assignment's Part 3 axis.
-- **By Population** -- select 2+ cell populations (all 5 by default) and
+- **By Population**: select 2+ cell populations (all 5 by default) and
   compare them directly against each other *within* the same cohort.
   This uses a **paired test** (Wilcoxon signed-rank), not the unpaired
   Mann-Whitney used everywhere else, because two populations'
-  percentages from the same sample aren't independent samples -- see
+  percentages from the same sample aren't independent samples. See
   "Statistical approach" below for why that distinction matters.
-- **By Date** -- select 2 or all 3 timepoints and compare them against
+- **By Date**: select 2 or all 3 timepoints and compare them against
   each other, per population. Selecting 3 timepoints tests every pair
   (3 pairs), not just one.
-- **Custom** -- build 2 to 4 independent cohorts with any combination of
+- **Custom**: build 2 to 4 independent cohorts with any combination of
   filters and compare them all against each other.
 
 Any number of groups beyond 2 is handled by testing every pairwise
@@ -202,26 +205,26 @@ together (see `compare_n_groups` in `analysis.py`). This correction gets
 stricter fast as more groups are added: 3 groups is 3 pairs per
 population, 4 groups is 6 pairs per population. That's the real
 statistical cost of choosing pairwise tests over a single omnibus test
-(e.g. Kruskal-Wallis) -- worth knowing before comparing many groups at
+(e.g. Kruskal-Wallis), worth knowing before comparing many groups at
 once.
 
 Responder/Non-responder and Cohort A/B deliberately share the exact same
-2 colors (blue / reddish purple, Okabe-Ito) -- both are "first group vs.
+2 colors (blue / reddish purple, Okabe-Ito): both are "first group vs.
 second group in a two-way split," so one consistent color pairing is used
 throughout rather than two different ones.
 
 The required, graded Part 2-4 answers can still be reproduced exactly:
 Part 2 and Part 4's baseline summary from the Default tab's frequency
 table and cohort summary with the right filters applied, and Part 3 from
-the Responder vs Non-responder tab with the miraclib+PBMC filters applied
-(documented in the assignment spec).
+the Responder vs Non-responder tab with the melanoma, miraclib, and PBMC
+filters applied (documented in the assignment spec).
 
 ## Schema design
 
 ```
 subjects (subject_id PK, project, condition, age, sex, treatment, response)
 samples  (sample_id PK, subject_id FK, sample_type, time_from_treatment_start)
-cell_counts (sample_id FK, population, count)  -- composite PK (sample_id, population)
+cell_counts (sample_id FK, population, count, PRIMARY KEY(sample_id, population))
 ```
 
 **Rationale:**
@@ -257,7 +260,7 @@ actually need to change:
 - **`project` becomes its own table.** Right now it's a plain string column
   on `subjects`. At hundreds of projects, project-level metadata (PI,
   institution, funding source, start date) needs somewhere to live that
-  isn't duplicated across every subject row -- a `projects` table
+  isn't duplicated across every subject row: a `projects` table
   (`project_id` PK, plus those attributes) with `subjects.project_id` as a
   foreign key, same normalization logic already applied to `subjects` and
   `samples`.
@@ -265,8 +268,8 @@ actually need to change:
   `sample_type`, `time_from_treatment_start`, and `population` are the
   columns every query in this project group-bys or filters on. SQLite
   handles the current volume fine without extra indexes, but at real scale
-  these would need explicit indexes (or, in Postgres, the equivalent) --
-  otherwise every filtered query degrades to a full table scan as row
+  these would need explicit indexes (or, in Postgres, the equivalent).
+  Otherwise every filtered query degrades to a full table scan as row
   counts grow.
 - **SQLite itself becomes the limiting factor before the schema does.**
   SQLite is single-writer and file-based, which is exactly right for a
@@ -274,7 +277,7 @@ actually need to change:
   wrong choice once multiple analysts need concurrent read/write access or
   the database needs to live somewhere other than "next to the code that
   built it." The schema itself is standard relational SQL and moves to
-  Postgres (or similar) without any redesign -- this is a deployment
+  Postgres (or similar) without any redesign. This is a deployment
   decision, not a schema one.
 
 **For "various types of analytics"**, the shape that generalizes well is
@@ -285,7 +288,7 @@ actual `ALTER TABLE` every time a new population is measured). The same
 pattern extends to analytics beyond cell counts: a new data type per sample
 (e.g. genomic variants, imaging features, longitudinal lab values) is a new
 fact table keyed by `sample_id`, sitting alongside `cell_counts` rather than
-inside it -- a star-schema-style extension, not a rewrite of `subjects` or
+inside it, a star-schema-style extension, not a rewrite of `subjects` or
 `samples`.
 
 ## Data validation
@@ -322,38 +325,44 @@ normality is the safer default here.
 sample's total cell count, so an increase in one population mechanically
 forces the others down. That "closure" constraint means the 5 populations
 aren't independent, and testing directly on raw percentages (or raw
-counts) treats them as if they were -- which can manufacture or mask
+counts) treats them as if they were, which can manufacture or mask
 apparent significance. The fix is the **centered log-ratio (CLR)
 transform**: for each sample, `clr_i = ln(count_i) - mean(ln(counts))`
 across that sample's own 5 populations, moving the data into ordinary,
 unconstrained real space before testing.
 
-This isn't a hypothetical concern for this dataset -- it changes the
-answer. Tested empirically, both ways, on the same miraclib+PBMC cohort:
+This isn't a hypothetical concern for this dataset, it changes the
+answer. Tested empirically, both ways, on the same melanoma, miraclib,
+and PBMC cohort that Part 3 asks for (see "Part 3 asks for melanoma
+patients specifically" below):
 
 | Population | Raw-percentage test | CLR-based test |
 |---|---|---|
-| `cd4_t_cell` | significant (p≈0.0002) | significant (p≈0.000006) |
-| `b_cell` | significant (p≈0.0011) | significant (p≈0.0056) |
-| `monocyte` | **significant** (p≈0.0079) | **not significant** (p≈0.15) |
+| `cd4_t_cell` | not significant (p≈0.0133) | **significant** (p≈0.0025) |
+| `b_cell` | not significant (p≈0.0557) | not significant (p≈0.1364) |
 | `nk_cell` | not significant | not significant |
+| `monocyte` | not significant | not significant |
 | `cd8_t_cell` | not significant | not significant |
 
 (p-values above are unadjusted; both columns are Bonferroni-corrected
-across 5 populations before deciding significance.) `cd4_t_cell` and
-`b_cell` are robust either way. `monocyte`'s apparent significance under
-raw percentages doesn't survive the CLR transform -- exactly the kind of
-result the closure problem predicts, and the reason CLR is used
-throughout this project (`analysis.py`'s `add_clr_column`), not just
-noted as a caveat.
+across 5 populations before deciding significance.) `cd4_t_cell` only
+reaches significance under the CLR-based test. Under raw percentages its
+Bonferroni-corrected p-value (≈0.067) just misses the 0.05 threshold,
+even though the unadjusted p-value (≈0.013) looks meaningful on its own.
+That is the closure problem in action from the other direction: it is not
+only capable of manufacturing a false positive (as it would for a
+population whose raw-percentage significance does not hold up under CLR),
+it can also mask a real one. This is the reason CLR is used throughout
+this project (`analysis.py`'s `add_clr_column`), not just noted as a
+caveat.
 
 **Caveat, stated plainly:** CLR is not a complete fix. The 5
 CLR-transformed values for a sample still sum to exactly zero by
 construction, so one linear dependency remains among them (unlike ILR,
 which uses 4 orthonormal coordinates and removes the constraint
 entirely). CLR was chosen over ILR here because it keeps one
-interpretable value per population -- matching what the assignment and
-Bob actually need ("which populations differ") -- whereas ILR's
+interpretable value per population, matching what the assignment and
+Bob actually need ("which populations differ"), whereas ILR's
 coordinates are linear combinations across multiple populations at once
 and don't map back to a single population cleanly. A fully rigorous
 treatment would use ILR or a compositional MANOVA as an omnibus test,
@@ -366,19 +375,33 @@ interpretable unit for describing composition. Only the significance
 test itself uses CLR.
 
 Because 5 populations are tested, a **Bonferroni correction** is applied
-(α = 0.05 / 5). After correction, `cd4_t_cell` and `b_cell` remain
-statistically significant. `monocyte`, `nk_cell`, and `cd8_t_cell` do
-not. This is the headline finding for Part 3.
+(alpha = 0.05 / 5). After correction, `cd4_t_cell` is the only population
+that remains statistically significant. `b_cell`, `monocyte`, `nk_cell`,
+and `cd8_t_cell` do not. This is the headline finding for Part 3.
+
+**Part 3 asks for melanoma patients specifically.** The assignment's
+exact wording is "melanoma patients receiving miraclib," and "please only
+include PBMC samples." `get_responder_comparison()` in `analysis.py`
+filters on `condition = 'melanoma'`, `treatment = 'miraclib'`, and
+`sample_type = 'PBMC'` together, matching that wording exactly: 1,968
+samples across 656 subjects (331 responders, 325 non-responders), spanning
+2 of the 3 projects (`prj1` and `prj3`). `prj2` has 229 melanoma, miraclib
+subjects of its own, but all of them were only ever sampled as WB, never
+PBMC, so the PBMC restriction excludes that project entirely from this
+particular cohort, not the melanoma restriction on its own. To reproduce
+this in the dashboard, apply all three filters (condition, treatment,
+sample type) on the Responder vs Non-responder tab, not just treatment
+and sample type.
 
 **Paired vs. unpaired tests, and why it matters which one you use.**
 Every comparison in this dashboard is Mann-Whitney (unpaired) on CLR
 values, *except* the By Population tab, which uses the **Wilcoxon
 signed-rank test** (paired) instead. The reason is structural, not a
 preference: Responder vs. Non-responder, By Date, and Custom all
-compare *different sets of samples* against each other -- genuinely
+compare *different sets of samples* against each other, genuinely
 independent groups, which is exactly what Mann-Whitney assumes. By
 Population mode compares *the same samples'* `b_cell%` against their
-`cd4_t_cell%` -- two measurements from the same sample, tied together by
+`cd4_t_cell%`, two measurements from the same sample, tied together by
 the same compositional closure constraint discussed above. Treating that
 as two independent groups (unpaired) would be the wrong test for the same
 underlying reason raw percentages needed the CLR fix: it ignores a real
@@ -388,18 +411,18 @@ values for the matched set of samples present in both.
 
 ## Confounder check
 
-Part 3's comparison pools samples across all 3 projects, both sexes, and
-a range of ages without stratifying by any of them. If response rates or
-population baselines differed systematically by project (batch effects
-are common in cytometry data pooled across cohorts/sites), an observed
-"responders differ" finding could partly be a project effect rather than
-a genuine treatment-response signal.
+Part 3's comparison pools samples across both of the 2 projects present in
+this cohort, both sexes, and a range of ages without stratifying by any of
+them. If response rates or population baselines differed systematically by
+project (batch effects are common in cytometry data pooled across
+cohorts/sites), an observed "responders differ" finding could partly be a
+project effect rather than a genuine treatment-response signal.
 
 `analysis.py`'s `check_group_balance(df, group_col, stratify_col)`
 checks this directly: a chi-square test of independence on a per-subject
 contingency table, checking whether `group_col` (e.g. `response`) is
 balanced across levels of `stratify_col` (e.g. `project`). It's
-general-purpose by construction -- it takes whatever dataframe and column
+general-purpose by construction. It takes whatever dataframe and column
 names are passed in, so it recomputes against whatever data is actually
 loaded rather than reporting a historical fact about this one CSV. That's
 what makes it valid if a different or updated dataset arrives: the check
@@ -407,8 +430,9 @@ is code, not documentation. It's surfaced live in the dashboard, in an
 expander under the Responder vs Non-responder tab.
 
 For the current dataset, in the Part 3 cohort: **response is balanced
-across project** (49.8% vs. 49.8%, p≈1.0) and **across sex** (p≈0.27) --
-no evidence either is confounding the comparison. A high p-value here
+across project** (`prj1` is 58.2% of non-responders and 58.9% of
+responders, `prj3` the remainder; p≈0.91) and **across sex** (p≈0.12).
+No evidence either is confounding the comparison. A high p-value here
 means no evidence of imbalance was found, not that confounding is proven
 absent; this is a simple heuristic (p > 0.05), not a formal equivalence
 test, and it only covers the two variables checked (project, sex), not
@@ -417,7 +441,7 @@ every possible confounder.
 ## The four comparison tabs
 
 **Responder vs Non-responder** lets you filter on any combination of
-variables (response itself isn't offered as a pre-filter -- it's the
+variables (response itself isn't offered as a pre-filter, since it's the
 comparison axis), and compares responders against non-responders within
 that cohort: average cell count/percentage per group, a distribution
 boxplot, and a Mann-Whitney test per population.
@@ -437,13 +461,13 @@ pair (3 tests per population instead of 1).
 filter set and a custom label) and compares them all directly against
 each other: average cell count/percentage per population, a distribution
 boxplot, and a Mann-Whitney test per population, per pair of cohorts.
-Cohort labels must be unique -- the dashboard checks and shows an error
+Cohort labels must be unique. The dashboard checks and shows an error
 rather than silently merging two identically-labeled cohorts.
 
 **All four comparison tabs share the same section order** (cohort
 summary, average table + charts, frequency table, distribution boxplot,
 stats table), so switching between them doesn't mean re-learning the
-layout -- confirmed directly by walking the rendered page and checking
+layout. Confirmed directly by walking the rendered page and checking
 each tab's section headers appear in the same sequence, not just
 eyeballed.
 
@@ -451,13 +475,13 @@ eyeballed.
 default (all `b_cell` rows together, then `cd8_t_cell`, in canonical
 order), or a checkbox to instead surface Bonferroni-significant results
 at the top regardless of population. Both orderings answer a genuinely
-different question -- "what's going on with this population
-specifically" vs. "what's the strongest finding here" -- so this is an
-explicit choice, not a default silently picked for you.
+different question, "what's going on with this population specifically"
+versus "what's the strongest finding here," so this is an explicit
+choice, not a default silently picked for you.
 
 **The average-count and average-percentage bar charts facet by
 population with independent y-axis scales**, whenever they're showing a
-comparison (Responder/Non-responder, By Date, Custom -- not the plain
+comparison (Responder/Non-responder, By Date, Custom, not the plain
 population-colored version in Default/By Population). This isn't
 cosmetic: between-population variation in raw cell count (e.g. `b_cell`
 ~10k vs. `cd4_t_cell` ~30k) is far larger than the real variation across
@@ -465,12 +489,12 @@ comparison groups within one population (often under 2%), so a shared
 axis makes correctly-computed differences visually invisible. Verified
 directly against real data before concluding this was a display problem,
 not a computation bug: per-timepoint averages for `b_cell` genuinely
-differ (9908 -> 9965 -> 9909 across the 3 days), just by an amount too
+differ (9908 to 9965 to 9909 across the 3 days), just by an amount too
 small to see against a ~20,000-unit shared scale.
 
 **These results are exploratory, not confirmatory.** Every comparison
 tab lets you re-slice the cohort and re-run the same test machinery in
-effectively unlimited ways -- a classic garden-of-forking-paths setup.
+effectively unlimited ways, a classic garden-of-forking-paths setup.
 Bonferroni correction is applied correctly within a single result (across
 every population/pair combination actually tested), but there's no
 correction across the broader search space of every filter combination
@@ -484,8 +508,8 @@ into the Min age / Max age number inputs. The two stay in sync in either
 direction (moving the slider updates the number inputs, and vice versa).
 Comparison-group order (Responder before Non-responder, chronological
 timepoints, cohort A before B before C before D) is pinned explicitly
-throughout -- both in the underlying data (`get_population_averages`,
-`compare_n_groups`) and in each chart's `category_orders` -- rather than
+throughout, both in the underlying data (`get_population_averages`,
+`compare_n_groups`) and in each chart's `category_orders`, rather than
 left to default alphabetical or click-order sorting. That default
 sorting was a real, confirmed inconsistency at one point (the average
 table showed "Non-responder" before "Responder" while the distribution
@@ -531,13 +555,13 @@ protanopia, and tritanopia). Population names are also color-coded in the
 summary tables (average counts, stats results), using pandas' `Styler`.
 
 **Boxplots** fill each box in the compared group's own color, exactly
-matching that group's legend swatch -- there's never a mismatch between
+matching that group's legend swatch. There's never a mismatch between
 what the legend shows and what's actually drawn. Population is conveyed
 separately: each facet's background is tinted with that population's own
 color at a low, fixed opacity (`POPULATION_BACKGROUND_OPACITY`), and the
 population name is shown as that facet's x-axis title. A small key below
 each boxplot shows exactly which population color maps to which
-background tint -- built from the *exact* list of populations the
+background tint, built from the *exact* list of populations the
 boxplot actually faceted (returned directly by `render_boxplot`), not
 independently recomputed from a stats table, since two separate
 computations of "which populations, in what order" can drift apart if
@@ -545,13 +569,22 @@ either one's filtering logic changes later (this happened once: a
 population-filtered cohort produced facets for all 5 populations
 regardless of what was actually selected, misaligning every facet-indexed
 label onto the wrong facet). The key's swatch opacity matches the actual
-facet background exactly, rather than a solid, fully-opaque dot -- an
+facet background exactly, rather than a solid, fully-opaque dot. An
 earlier version showed a visibly more saturated color in the key than
 what the chart itself displayed.
 
+**Bar charts** (average cell count and average percentage) use
+`GROUP_FILL_ALPHA`, the same fill opacity value the boxplot's boxes use,
+for both the population-colored and comparison-group-colored variants.
+An earlier version left the comparison-group bars fully opaque and the
+population-colored bars at the much lower `POPULATION_BACKGROUND_OPACITY`
+(meant for background tints, not fills), so the same colors read at
+noticeably different intensities depending on chart type. Both now match
+the boxplot's fill exactly.
+
 **Cohort summary** (Default, Responder vs Non-responder, By Population,
 and By Date tabs, plus Custom's combined per-cohort version) breaks down
-subjects by project, condition, treatment, response, and sex -- 5 tables
+subjects by project, condition, treatment, response, and sex: 5 tables
 total, always in that order.
 
 **Filters** are collapsed by default inside an expander, with a badge
@@ -589,11 +622,5 @@ Filtered to melanoma, PBMC, miraclib-treated, baseline (`time_from_treatment_sta
 (Response/sex counts are per-subject, not per-sample, since each subject has
 exactly one response and sex value across all their samples.)
 
-Reproducible via `make pipeline` (writes `baseline_melanoma_samples.csv` and
-`part4_summary.txt`) or the same filters in the dashboard's Default tab.
-
-## Note on the assignment document
-
-One section of the original assignment document contained a hidden
-instruction not related to the actual task. It was not acted on and does
-not appear anywhere in this submission.
+Reproducible via `make pipeline` (writes `part4_baseline_melanoma_samples.csv`
+and `part4_summary.txt`) or the same filters in the dashboard's Default tab.
