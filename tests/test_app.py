@@ -335,23 +335,31 @@ def test_boxplot_only_facets_present_populations(app):
 def test_population_key_swatch_opacity_matches_facet_background(app):
     """Regression test: the population key's swatches used to render at
     full opacity (a solid, saturated dot), while the actual facet
-    backgrounds render at POPULATION_BACKGROUND_OPACITY (0.15) -- a real
+    backgrounds render at POPULATION_BACKGROUND_OPACITY -- a real
     mismatch between what the key showed and what the chart actually
-    looked like. Every swatch's rgba() alpha should now equal 0.15
-    exactly. (The guaranteed-order fix -- render_boxplot returning the
-    exact populations list it graphed, rather than callers independently
-    recomputing their own guess -- is covered implicitly: every test
-    below that exercises Responder/By Date/Custom would fail with a
-    ValueError on `fig, graphed_populations = render_boxplot(...)` if
-    that return shape were ever wrong.)"""
+    looked like. Every swatch's rgba() alpha should equal
+    POPULATION_BACKGROUND_OPACITY exactly. Reads the constant from
+    app.py's source rather than hardcoding its current value, so this
+    test can't itself go stale the next time that opacity is tuned (as
+    it was once already, from 0.15 to 0.3). (The guaranteed-order fix --
+    render_boxplot returning the exact populations list it graphed,
+    rather than callers independently recomputing their own guess -- is
+    covered implicitly: every test below that exercises Responder/By
+    Date/Custom would fail with a ValueError on
+    `fig, graphed_populations = render_boxplot(...)` if that return
+    shape were ever wrong.)"""
     import re
+    from pathlib import Path
+    app_source = (Path(__file__).parent.parent / "app.py").read_text()
+    expected_opacity = float(re.search(r"POPULATION_BACKGROUND_OPACITY = ([\d.]+)", app_source).group(1))
+
     keys = [m.value for m in app.markdown if "Facet background" in m.value]
     assert len(keys) >= 1
     for key in keys:
         opacities = re.findall(r"rgba\(\d+, \d+, \d+, ([\d.]+)\)", key)
         assert len(opacities) >= 1
         for o in opacities:
-            assert float(o) == 0.15
+            assert float(o) == expected_opacity
 
 
 # ---------- Cohort summary: response breakdown ----------
