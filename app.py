@@ -37,6 +37,7 @@ from analysis import (
     get_filtered_frequency_table,
     get_population_averages,
     compare_n_groups,
+    compare_n_groups_paired,
     compare_populations_paired,
 )
 
@@ -1196,11 +1197,14 @@ with tab_date:
     st.subheader("Compare timepoints directly")
     st.caption(
         "Build a cohort using any combination of filters, then compare 2 "
-        "or more timepoints against each other, per population. Selecting "
-        "3+ timepoints tests every pair, Bonferroni-corrected across all "
-        "pairs and populations tested together -- this correction gets "
-        "stricter fast as more timepoints are selected at once (see "
-        "compare_n_groups in analysis.py)."
+        "or more timepoints against each other, per population. Every "
+        "subject is sampled at every timepoint, so this is a paired "
+        "comparison: a Wilcoxon signed-rank test on each subject's own "
+        "change between timepoints (see the README's 'Statistical "
+        "approach'). Selecting 3+ timepoints tests every pair, "
+        "Bonferroni-corrected across all pairs and populations tested "
+        "together -- the correction gets stricter fast as more "
+        "timepoints are selected at once."
     )
 
     filters = filters_with_expander(full, "date_mode", exclude={"time_from_treatment_start"})
@@ -1242,7 +1246,7 @@ with tab_date:
                 label: N_GROUP_COLOR_SEQUENCE[i % len(N_GROUP_COLOR_SEQUENCE)]
                 for i, label in enumerate(group_dfs.keys())
             }
-            status, results = compare_n_groups(group_dfs)
+            status, results = compare_n_groups_paired(group_dfs)
             render_n_group_messages(status, results)
 
             if status == "ok":
@@ -1282,7 +1286,7 @@ with tab_date:
 
                 st.write("")
                 with st.container(border=True):
-                    st.write("**Mann-Whitney U results** (Bonferroni-corrected across all pairs and populations tested)")
+                    st.write("**Wilcoxon signed-rank results (paired)** (Bonferroni-corrected across all pairs and populations tested)")
                     render_comparison_stats_table(results, "date_mode_stats", "date_comparison_stats.csv")
 
 
