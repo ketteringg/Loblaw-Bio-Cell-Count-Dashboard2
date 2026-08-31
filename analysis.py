@@ -138,26 +138,6 @@ def get_frequency_table(conn: sqlite3.Connection) -> pd.DataFrame:
     return df[["sample", "total_count", "population", "count", "percentage"]]
 
 
-def get_sample_totals(conn: sqlite3.Connection) -> pd.DataFrame:
-    """
-    One row per sample: the total cell count, obtained by summing counts
-    across all 5 populations. This is the specific intermediate step
-    Part 2 describes explicitly ("For each sample, calculate the total
-    number of cells by summing the counts across all five populations"),
-    surfaced here as its own table rather than only visible as the
-    repeated total_count column inside get_frequency_table's output.
-    Reuses get_frequency_table rather than re-querying, so there is one
-    place that computes total_count, not two.
-    """
-    freq = get_frequency_table(conn)
-    return (
-        freq[["sample", "total_count"]]
-        .drop_duplicates(subset="sample")
-        .sort_values("sample")
-        .reset_index(drop=True)
-    )
-
-
 # ---------- Part 3: responders vs non-responders ----------
 
 def get_responder_comparison(conn: sqlite3.Connection) -> pd.DataFrame:
