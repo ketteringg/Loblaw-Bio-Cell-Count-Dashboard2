@@ -665,3 +665,22 @@ exactly one response and sex value across all their samples.)
 
 Reproducible via `make pipeline` (writes `part4_baseline_melanoma_samples.csv`
 and `part4_summary.txt`) or the same filters in the dashboard's Default tab.
+
+## Known limitations
+
+**Chart height does not adapt to browser zoom.** Every `st.plotly_chart`
+call uses `width='stretch'`, so chart width correctly follows the
+container as it resizes. Height does not: no chart sets an explicit
+height, so all of them fall back to Plotly's fixed default (about 450px)
+regardless of the container's actual width. At normal zoom this looks
+fine, but at high browser zoom (150-200%) the effective container width
+shrinks substantially while height stays fixed, so the faceted charts in
+particular (5 population panels sharing that width, in the boxplots and
+comparison bar charts) can end up visibly cramped, with x-axis labels
+crowding or overlapping. `PLOTLY_CONFIG` in `app.py` does not currently
+set Plotly's own `responsive` option, and no chart computes height as a
+function of viewport size or facet count. A future update should address
+this, most likely by setting `"responsive": True` in `PLOTLY_CONFIG` and
+testing whether that alone is sufficient, or, if not, computing each
+chart's height dynamically (e.g. from facet count or container width)
+rather than relying on Plotly's fixed default.
