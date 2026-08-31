@@ -2,18 +2,11 @@
 generate_outputs.py
 
 Produces the required Part 2-4 deliverable files by calling the same
-analysis.py functions the interactive dashboard is built on. This keeps
-these files guaranteed to match what the dashboard shows for the
-equivalent fixed cohort, rather than being a separately maintained copy
-of the same logic.
-
-The dashboard (app.py) is deliberately general purpose (any cohort, any
-comparison) and doesn't have fixed tabs for Parts 2, 3, or 4
-specifically, since those are just special cases of what the dashboard
-can already do. This script exists so the required, graded outputs
-still exist as concrete files in the repo, without needing to click
-through the dashboard UI to reconstruct the exact required filter
-combination.
+analysis.py functions the interactive dashboard is built on, so these
+files always match what the dashboard shows for the equivalent cohort.
+The dashboard itself has no fixed Part 2/3/4 views (see README.md,
+"Code structure and why"); this script is what pins the graded outputs
+to concrete files a grader can open without clicking through the UI.
 
 Run after load_data.py:
     python generate_outputs.py
