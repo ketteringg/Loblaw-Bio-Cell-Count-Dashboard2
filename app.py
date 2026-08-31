@@ -443,56 +443,175 @@ def render_population_key(populations: list[str]):
     )
 
 
-def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, key_prefix: str):
+def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map, category_orders, is_comparison, yaxis_tickformat=None):
+    """Builds one average-count or average-percentage bar chart. When
+    is_comparison is True (color_col is a comparison group, not
+    population), facets by population instead of putting population on
+    the shared x-axis -- deliberately WITHOUT matches='y' (unlike the
+    boxplot), so each population gets its own independently-scaled
+    y-axis. This matters concretely: between-population variation (e.g.
+    b_cell ~10k cells vs cd4_t_cell ~30k) is far larger than
+    within-population variation across comparison groups (often under
+    1-2%), so a shared y-axis makes real, correctly-computed differences
+    visually indistinguishable -- verified directly against real data
+    (per-day averages genuinely differ, just by a small amount) before
+    concluding this was a display problem, not a computation bug."""
+    if is_comparison:
+        fig = px.bar(
+            avg_table, x=color_col, y=y_col, color=color_col,
+            color_discrete_map=color_map, facet_col="population", facet_col_wrap=5,
+            title=title, labels={y_col: y_label}, category_orders=category_orders,
+        )
+        fig.update_yaxes(matches=None, gridcolor="#000000", gridwidth=0.5)
+        if yaxis_tickformat:
+            fig.update_yaxes(tickformat=yaxis_tickformat)
+        fig.update_xaxes(showticklabels=False)
+        fig.update_traces(marker_line_width=1.5)
+        for trace in fig.data:
+            trace.marker.line.color = trace.marker.color
+        fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
+    else:
+        fig = px.bar(
+            avg_table, x="population", y=y_col, color=color_col,
+            color_discrete_map=color_map, barmode="group",
+            title=title, labels={y_col: y_label}, category_orders=category_orders,
+        )
+        fig.update_yaxes(gridcolor="#000000", gridwidth=0.5)
+        if yaxis_tickformat:
+            fig.update_yaxes(tickformat=yaxis_tickformat)
+        fig.update_layout(showlegend=False)
+        fig.update_traces(marker_opacity=POPULATION_BACKGROUND_OPACITY)
+    return fig
+
+
+def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, key_prefix: str, group_order: list | None = None):
     """Average cell count / average percentage bar charts, colored
     consistently by whatever column is being compared (population, or
-    response, or cohort). Response/cohort bars are solid, fully opaque
-    fills with a matching-color outline for crisp edges (no hatch pattern:
-    an earlier version used pattern_shape as a colorblind-safety measure,
-    but Plotly's default pattern assigns the *first* category an empty/
-    solid pattern and the *second* a diagonal-hatch fill, which reads as
-    "not fully filled in" rather than as a deliberate texture -- removed
-    in favor of just keeping the Okabe-Ito color choices themselves
-    colorblind-safe, which they already are). Population bars use
-    POPULATION_BACKGROUND_OPACITY, the same opacity value used everywhere
-    else population color appears (boxplot facet backgrounds, population
-    table cells), for consistency across the dashboard. Gridlines match
-    the boxplot's (black, thin) for the same reason."""
+    response, or cohort, or timepoint). Response/cohort/timepoint bars
+    are solid, fully opaque fills with a matching-color outline for crisp
+    edges (no hatch pattern: an earlier version used pattern_shape as a
+    colorblind-safety measure, but Plotly's default pattern assigns the
+    *first* category an empty/solid pattern and the *second* a
+    diagonal-hatch fill, which reads as "not fully filled in" rather than
+    as a deliberate texture -- removed in favor of just keeping the
+    Okabe-Ito color choices themselves colorblind-safe, which they
+    already are). Population bars use POPULATION_BACKGROUND_OPACITY, the
+    same opacity value used everywhere else population color appears
+    (boxplot facet backgrounds, population table cells), for consistency
+    across the dashboard.
+
+    group_order pins the legend/bar order for color_col explicitly. This
+    matters: without it, Plotly Express sorts a string column's values
+    alphabetically by default, which silently put "Non-responder" before
+    "Responder" here (while the distribution boxplot elsewhere used an
+    explicit Responder-first order) -- a real inconsistency, not a
+    stylistic choice, caught by comparing the two side by side."""
+    category_orders = {"population": POPULATIONS}
+    if group_order:
+        category_orders[color_col] = group_order
+    is_comparison = color_col != "population"
+
     chart_col1, chart_col2 = st.columns(2)
     with chart_col1:
-        fig_count = px.bar(
-            avg_table, x="population", y="avg_count", color=color_col,
-            color_discrete_map=color_map, barmode="group",
-            title="Average number of cells",
-            labels={"avg_count": "avg. cell count"},
-            category_orders={"population": POPULATIONS},
+        fig_count = _build_avg_bar_chart(
+            avg_table, "avg_count", "avg. cell count", "Average number of cells",
+            color_col, color_map, category_orders, is_comparison, yaxis_tickformat=",",
         )
-        fig_count.update_yaxes(tickformat=",", gridcolor="#000000", gridwidth=0.5)
-        if color_col == "population":
-            fig_count.update_layout(showlegend=False)
-            fig_count.update_traces(marker_opacity=POPULATION_BACKGROUND_OPACITY)
-        else:
-            fig_count.update_traces(marker_line_width=1.5, selector=lambda t: True)
-            for trace in fig_count.data:
-                trace.marker.line.color = trace.marker.color
         st.plotly_chart(fig_count, width='stretch', key=f"{key_prefix}_avg_count_chart")
     with chart_col2:
-        fig_pct = px.bar(
-            avg_table, x="population", y="avg_percentage", color=color_col,
-            color_discrete_map=color_map, barmode="group",
-            title="Average relative frequency",
-            labels={"avg_percentage": "avg. % of total cells"},
-            category_orders={"population": POPULATIONS},
+        fig_pct = _build_avg_bar_chart(
+            avg_table, "avg_percentage", "avg. % of total cells", "Average relative frequency",
+            color_col, color_map, category_orders, is_comparison,
         )
-        fig_pct.update_yaxes(gridcolor="#000000", gridwidth=0.5)
-        if color_col == "population":
-            fig_pct.update_layout(showlegend=False)
-            fig_pct.update_traces(marker_opacity=POPULATION_BACKGROUND_OPACITY)
-        else:
-            fig_pct.update_traces(marker_line_width=1.5, selector=lambda t: True)
-            for trace in fig_pct.data:
-                trace.marker.line.color = trace.marker.color
         st.plotly_chart(fig_pct, width='stretch', key=f"{key_prefix}_avg_pct_chart")
+
+
+def render_cohort_summary_block(df: pd.DataFrame):
+    """Cohort summary card: sample/subject counts + breakdowns by
+    project/condition/treatment/sex. Shared across every single-cohort
+    tab (Default, Responder vs Non-responder, By Population, By Date) so
+    this section always appears in the same place with the same shape --
+    Custom mode uses combined_cohort_breakdown_table instead, since it
+    has multiple independent cohorts rather than one."""
+    summary = get_cohort_summary(df)
+    with st.container(border=True):
+        c1, c2 = st.columns(2)
+        c1.metric("Samples in cohort", f"{summary['n_samples']:,}")
+        c2.metric("Subjects in cohort", f"{summary['n_subjects']:,}")
+
+        b1, b2, b3, b4 = st.columns(4)
+        with b1:
+            st.write("**By project**")
+            st.dataframe(summary["samples_per_project"], hide_index=True, width='stretch')
+        with b2:
+            st.write("**By condition**")
+            st.dataframe(summary["subjects_by_condition"], hide_index=True, width='stretch')
+        with b3:
+            st.write("**By treatment**")
+            st.dataframe(summary["subjects_by_treatment"], hide_index=True, width='stretch')
+        with b4:
+            st.write("**By sex**")
+            st.dataframe(summary["subjects_by_sex"], hide_index=True, width='stretch')
+
+
+def combined_cohort_breakdown_table(cohort_dfs_by_label: dict, breakdown_key: str) -> pd.DataFrame:
+    """Combines get_cohort_summary's breakdown table across 2+ cohorts
+    into ONE table with a 'cohort' column, instead of one small table per
+    cohort per dimension -- used by Custom mode's summary section so it
+    stays at 4 breakdown tables total (same as every other tab), not
+    4 x (number of cohorts)."""
+    frames = []
+    for label, df in cohort_dfs_by_label.items():
+        summary = get_cohort_summary(df)
+        piece = summary[breakdown_key].copy()
+        piece.insert(0, "cohort", label)
+        frames.append(piece)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def render_avg_table_and_charts(
+    avg_table: pd.DataFrame, key_prefix: str, color_col: str, color_map: dict,
+    group_order: list | None = None, download_filename: str = "average_cell_counts.csv",
+):
+    """Average cell count/percentage table (+ download) and bar charts,
+    given an already-built avg_table. Shared rendering so this section
+    looks and behaves identically across every tab -- the table itself
+    (not just the charts) is always shown and always downloadable, which
+    an earlier version of By Date and Custom mode omitted."""
+    if avg_table.empty:
+        st.info("No data available for this cohort.")
+        return
+    display_cols = {
+        "avg_count": "avg. number of cells",
+        "avg_percentage": "avg. % of total cells",
+        "n_samples": "n samples",
+    }
+    avg_display = avg_table.rename(columns=display_cols)
+    st.dataframe(
+        style_population_column(avg_display), width='stretch', hide_index=True,
+        column_config={"avg. number of cells": st.column_config.NumberColumn(format="localized")},
+    )
+    download_csv_button(avg_table, download_filename, "Download this table as CSV", key=f"{key_prefix}_avg_download")
+    st.write("")
+    render_avg_charts(avg_table, color_col, color_map, key_prefix=key_prefix, group_order=group_order)
+
+
+def render_frequency_table_block(freq_df: pd.DataFrame, key_prefix: str, download_filename: str = "frequency_table.csv"):
+    """Sample x population frequency table (+ download). Shared rendering
+    so this section appears identically across every tab."""
+    # Not population-colored: this table can have thousands of rows (one
+    # per sample x population), which exceeds pandas Styler's cell-count
+    # limit and, more importantly, wouldn't be very readable as row-by-row
+    # color banding anyway. Coloring is reserved for the short, scannable
+    # summary tables instead.
+    st.dataframe(
+        freq_df, width='stretch', height=300,
+        column_config={
+            "count": st.column_config.NumberColumn(format="localized"),
+            "total_count": st.column_config.NumberColumn(format="localized"),
+        },
+    )
+    download_csv_button(freq_df, download_filename, "Download this table as CSV", key=f"{key_prefix}_freq_download")
 
 
 def render_stats_messages(status: str, results: pd.DataFrame | None):
@@ -516,6 +635,55 @@ def render_stats_messages(status: str, results: pd.DataFrame | None):
                 f"(n={row['n_responders']} responders, n={row['n_non_responders']} "
                 f"non-responders). p-value may be unreliable (threshold: n<{SMALL_N_THRESHOLD})."
             )
+
+
+def render_comparison_stats_table(
+    results: pd.DataFrame, key_prefix: str, download_filename: str,
+    group_col: str | None = "population",
+):
+    """Renders a comparison stats table (Mann-Whitney/Wilcoxon results)
+    with a toggle between two orderings: grouped by group_col (default --
+    e.g. all b_cell rows together, then all cd8_t_cell rows, in canonical
+    population order), or with the most statistically significant results
+    surfaced at the top regardless of group. Both are genuinely useful for
+    different purposes -- grouped-by-type answers "what's going on with
+    this population specifically," surfaced-by-significance answers
+    "what's the strongest finding here" -- so this is an explicit choice
+    rather than one silently picked for the user. Shared across every
+    comparison tab so the toggle behaves identically everywhere."""
+    sort_significant = st.checkbox(
+        "Bring significant results to the top", key=f"{key_prefix}_sig_sort",
+        help="Off (default): grouped by cell type. On: sorted by "
+             "statistical significance, most significant first, "
+             "regardless of cell type.",
+    )
+    display_results = results.drop(columns=["status", "small_n_warning"]).copy()
+
+    if sort_significant:
+        display_results = display_results.sort_values(
+            ["significant_bonferroni", "p_value_bonferroni"], ascending=[False, True],
+        )
+    elif group_col and group_col in display_results.columns:
+        sort_key = display_results[group_col]
+        if group_col == "population":
+            sort_key = pd.Categorical(sort_key, categories=POPULATIONS, ordered=True)
+        display_results = (
+            display_results.assign(_sort_key=sort_key)
+            .sort_values(["_sort_key", "p_value_bonferroni"])
+            .drop(columns=["_sort_key"])
+        )
+    else:
+        display_results = display_results.sort_values("p_value_bonferroni")
+
+    display_results = display_results.reset_index(drop=True)
+    display_results["p_value"] = display_results["p_value"].apply(format_pvalue)
+    display_results["p_value_bonferroni"] = display_results["p_value_bonferroni"].apply(format_pvalue)
+
+    if group_col == "population" and "population" in display_results.columns:
+        st.dataframe(style_population_column(display_results), width='stretch', hide_index=True)
+    else:
+        st.dataframe(display_results, width='stretch', hide_index=True)
+    download_csv_button(display_results, download_filename, "Download this table as CSV", key=f"{key_prefix}_download")
 
 
 def render_n_group_messages(status: str, results: pd.DataFrame | None):
@@ -787,7 +955,7 @@ with tab_default:
     st.caption(
         "Filter by any combination of variables in the dataset. Cohort "
         "counts, average cell counts, and the frequency table all "
-        "recompute live. Switch to one of the other views above to "
+        "recompute live. Switch to one of the other tabs above to "
         "compare groups against each other."
     )
 
@@ -799,72 +967,19 @@ with tab_default:
     if filtered.empty:
         st.info("No samples match the selected filters.")
     else:
-        summary = get_cohort_summary(filtered)
-        with st.container(border=True):
-            c1, c2 = st.columns(2)
-            c1.metric("Samples in cohort", f"{summary['n_samples']:,}")
-            c2.metric("Subjects in cohort", f"{summary['n_subjects']:,}")
-
-            b1, b2, b3, b4 = st.columns(4)
-            with b1:
-                st.write("**By project**")
-                st.dataframe(summary["samples_per_project"], hide_index=True, width='stretch')
-            with b2:
-                st.write("**By condition**")
-                st.dataframe(summary["subjects_by_condition"], hide_index=True, width='stretch')
-            with b3:
-                st.write("**By treatment**")
-                st.dataframe(summary["subjects_by_treatment"], hide_index=True, width='stretch')
-            with b4:
-                st.write("**By sex**")
-                st.dataframe(summary["subjects_by_sex"], hide_index=True, width='stretch')
+        render_cohort_summary_block(filtered)
 
         st.write("")
         with st.container(border=True):
             st.write("**Average cell count and relative frequency for this cohort**")
             avg_table = get_population_averages(filtered)
-            if avg_table.empty:
-                st.info("No data available for this cohort.")
-            else:
-                display_cols = {
-                    "avg_count": "avg. number of cells",
-                    "avg_percentage": "avg. % of total cells",
-                    "n_samples": "n samples",
-                }
-                avg_display = avg_table.rename(columns=display_cols)
-                st.dataframe(
-                    style_population_column(avg_display), width='stretch', hide_index=True,
-                    column_config={
-                        "avg. number of cells": st.column_config.NumberColumn(format="localized"),
-                    },
-                )
-                download_csv_button(
-                    avg_table, "average_cell_counts.csv", "Download this table as CSV",
-                    key="default_avg_download",
-                )
-                st.write("")
-                render_avg_charts(avg_table, "population", POP_COLORS, key_prefix="default")
+            render_avg_table_and_charts(avg_table, "default", "population", POP_COLORS)
 
         st.write("")
         with st.container(border=True):
             st.write("**Frequency table for this cohort**")
             freq_filtered = get_filtered_frequency_table(filtered)
-            # Not population-colored: this table can have thousands of rows
-            # (one per sample x population), which exceeds pandas Styler's
-            # cell-count limit and, more importantly, wouldn't be very
-            # readable as row-by-row color banding anyway. Coloring is
-            # reserved for the short, scannable summary tables instead.
-            st.dataframe(
-                freq_filtered, width='stretch', height=300,
-                column_config={
-                    "count": st.column_config.NumberColumn(format="localized"),
-                    "total_count": st.column_config.NumberColumn(format="localized"),
-                },
-            )
-            download_csv_button(
-                freq_filtered, "frequency_table.csv", "Download this table as CSV",
-                key="default_freq_download",
-            )
+            render_frequency_table_block(freq_filtered, "default")
 
         st.write("")
         with st.container(border=True):
@@ -894,76 +1009,71 @@ with tab_resp:
 
     st.divider()
 
-    st.caption(
-        "Exploratory result: this test ran against whatever cohort you "
-        "built above, not a pre-specified comparison. This tool lets you "
-        "filter and re-test in effectively unlimited ways; p-values from "
-        "ad hoc slices carry less evidentiary weight than a single "
-        "pre-registered comparison (like the fixed miraclib+PBMC "
-        "comparison documented in the README) and shouldn't be read as "
-        "confirmatory on their own."
-    )
-    status, results = run_stats_test_safe(filtered)
-    render_stats_messages(status, results)
+    if filtered.empty:
+        st.info("No samples match the selected filters.")
+    else:
+        render_cohort_summary_block(filtered)
 
-    if status == "ok":
-        with st.expander("Confounder check: is response balanced across project / sex?", expanded=False):
-            st.caption(
-                "A high p-value here means no evidence of imbalance was "
-                "found, not that confounding is proven absent -- this is a "
-                "simple heuristic (p > 0.05), not a formal equivalence test."
-            )
-            for stratify_col, label in [("project", "Project"), ("sex", "Sex")]:
-                balance = check_group_balance(filtered, group_col="response", stratify_col=stratify_col)
-                if balance["p_value"] is None:
-                    st.write(f"**{label}**: only one level present in this cohort, check doesn't apply.")
-                else:
-                    icon = "\u2705" if balance["balanced"] else "\u26a0\ufe0f"
-                    verdict = "no evidence of imbalance" if balance["balanced"] else "possible imbalance, interpret with extra caution"
-                    st.write(f"{icon} **{label}**: p={balance['p_value']:.4f} ({verdict})")
-                    st.dataframe(balance["contingency_table"], width='stretch')
+        st.write("")
+        st.caption(
+            "Exploratory result: this test ran against whatever cohort you "
+            "built above, not a pre-specified comparison. This tool lets you "
+            "filter and re-test in effectively unlimited ways; p-values from "
+            "ad hoc slices carry less evidentiary weight than a single "
+            "pre-registered comparison (like the fixed miraclib+PBMC "
+            "comparison documented in the README) and shouldn't be read as "
+            "confirmatory on their own."
+        )
+        status, results = run_stats_test_safe(filtered)
+        render_stats_messages(status, results)
 
-        with st.container(border=True):
-            st.write("**Average cell count and relative frequency**")
-            avg_table = get_population_averages(filtered, split_by_response=True)
-            display_cols = {
-                "avg_count": "avg. number of cells",
-                "avg_percentage": "avg. % of total cells",
-                "n_samples": "n samples",
-            }
-            avg_display = avg_table.rename(columns=display_cols)
-            st.dataframe(
-                style_population_column(avg_display), width='stretch', hide_index=True,
-                column_config={"avg. number of cells": st.column_config.NumberColumn(format="localized")},
-            )
-            download_csv_button(
-                avg_table, "responder_averages.csv", "Download this table as CSV",
-                key="resp_avg_download",
-            )
+        if status == "ok":
+            with st.expander("Confounder check: is response balanced across project / sex?", expanded=False):
+                st.caption(
+                    "A high p-value here means no evidence of imbalance was "
+                    "found, not that confounding is proven absent -- this is a "
+                    "simple heuristic (p > 0.05), not a formal equivalence test."
+                )
+                for stratify_col, label in [("project", "Project"), ("sex", "Sex")]:
+                    balance = check_group_balance(filtered, group_col="response", stratify_col=stratify_col)
+                    if balance["p_value"] is None:
+                        st.write(f"**{label}**: only one level present in this cohort, check doesn't apply.")
+                    else:
+                        icon = "\u2705" if balance["balanced"] else "\u26a0\ufe0f"
+                        verdict = "no evidence of imbalance" if balance["balanced"] else "possible imbalance, interpret with extra caution"
+                        st.write(f"{icon} **{label}**: p={balance['p_value']:.4f} ({verdict})")
+                        st.dataframe(balance["contingency_table"], width='stretch')
+
             st.write("")
-            render_avg_charts(avg_table, "response_label", RESPONSE_COLORS, key_prefix="resp_mode")
+            with st.container(border=True):
+                st.write("**Average cell count and relative frequency**")
+                avg_table = get_population_averages(filtered, split_by_response=True)
+                render_avg_table_and_charts(
+                    avg_table, "resp_mode", "response_label", RESPONSE_COLORS,
+                    group_order=["Responder", "Non-responder"],
+                    download_filename="responder_averages.csv",
+                )
 
-        st.write("")
-        with st.container(border=True):
-            st.write("**Distribution comparison**")
-            fig = render_boxplot(
-                filtered, results, group_order=["Responder", "Non-responder"],
-                group_colors=[RESPONSE_COLORS["Responder"], RESPONSE_COLORS["Non-responder"]],
-            )
-            st.plotly_chart(fig, width='stretch', key="resp_boxplot", config=PLOTLY_CONFIG)
-            render_population_key(results["population"].tolist())
+            st.write("")
+            with st.container(border=True):
+                st.write("**Frequency table for this cohort**")
+                freq_filtered = get_filtered_frequency_table(filtered)
+                render_frequency_table_block(freq_filtered, "resp_mode")
 
-        st.write("")
-        with st.container(border=True):
-            st.write("**Mann-Whitney U results** (Bonferroni-corrected across populations tested)")
-            display_results = results.drop(columns=["status", "small_n_warning"]).copy()
-            display_results["p_value"] = display_results["p_value"].apply(format_pvalue)
-            display_results["p_value_bonferroni"] = display_results["p_value_bonferroni"].apply(format_pvalue)
-            st.dataframe(style_population_column(display_results), width='stretch', hide_index=True)
-            download_csv_button(
-                display_results, "responder_comparison_stats.csv", "Download this table as CSV",
-                key="resp_stats_download",
-            )
+            st.write("")
+            with st.container(border=True):
+                st.write("**Distribution comparison**")
+                fig = render_boxplot(
+                    filtered, results, group_order=["Responder", "Non-responder"],
+                    group_colors=[RESPONSE_COLORS["Responder"], RESPONSE_COLORS["Non-responder"]],
+                )
+                st.plotly_chart(fig, width='stretch', key="resp_boxplot", config=PLOTLY_CONFIG)
+                render_population_key(results["population"].tolist())
+
+            st.write("")
+            with st.container(border=True):
+                st.write("**Mann-Whitney U results** (Bonferroni-corrected across populations tested)")
+                render_comparison_stats_table(results, "resp_stats", "responder_comparison_stats.csv")
 
 
 # ---------- By Population: compare populations directly against each other ----------
@@ -987,13 +1097,40 @@ with tab_pop:
     if filtered.empty:
         st.info("No samples match the selected filters.")
     else:
-        selected_pops = st.multiselect(
+        render_cohort_summary_block(filtered)
+
+        st.write("")
+        with st.container(border=True):
+            st.write("**Average cell count and relative frequency**")
+            avg_table = get_population_averages(filtered)
+            render_avg_table_and_charts(avg_table, "pop_mode", "population", POP_COLORS)
+
+        st.write("")
+        with st.container(border=True):
+            st.write("**Frequency table for this cohort**")
+            freq_filtered = get_filtered_frequency_table(filtered)
+            render_frequency_table_block(freq_filtered, "pop_mode")
+
+        st.write("")
+        selected_pops_raw = st.multiselect(
             "Populations to compare", POPULATIONS, default=POPULATIONS,
             key="pop_mode_selected_populations",
         )
+        # Sorted to the canonical population order, not the order clicked --
+        # st.multiselect returns selections in click order, so without this
+        # a user who clicks nk_cell before b_cell would see that order
+        # reflected in the comparison, purely as an artifact of click order.
+        selected_pops = [p for p in POPULATIONS if p in selected_pops_raw]
         if len(selected_pops) < 2:
             st.info("Select at least 2 populations to compare.")
         else:
+            st.caption(
+                "Exploratory result: this cohort was built from whatever "
+                "filters you chose above, not a pre-specified comparison. "
+                "p-values from ad hoc slices carry less evidentiary weight "
+                "than a single pre-registered comparison and shouldn't be "
+                "read as confirmatory on their own."
+            )
             status, results = compare_populations_paired(filtered, selected_pops)
             render_n_group_messages(status, results)
 
@@ -1006,17 +1143,8 @@ with tab_pop:
                 st.write("")
                 with st.container(border=True):
                     st.write("**Wilcoxon signed-rank results** (Bonferroni-corrected across pairs tested)")
-                    st.caption(
-                        "Exploratory result: this cohort was built from whatever "
-                        "filters you chose above, not a pre-specified comparison."
-                    )
-                    display_results = results.drop(columns=["status", "small_n_warning"]).copy()
-                    display_results["p_value"] = display_results["p_value"].apply(format_pvalue)
-                    display_results["p_value_bonferroni"] = display_results["p_value_bonferroni"].apply(format_pvalue)
-                    st.dataframe(display_results, width='stretch', hide_index=True)
-                    download_csv_button(
-                        display_results, "population_comparison_stats.csv", "Download this table as CSV",
-                        key="pop_mode_stats_download",
+                    render_comparison_stats_table(
+                        results, "pop_mode_stats", "population_comparison_stats.csv", group_col="group_a",
                     )
 
 
@@ -1040,14 +1168,29 @@ with tab_date:
     if filtered.empty:
         st.info("No samples match the selected filters.")
     else:
+        render_cohort_summary_block(filtered)
+
+        st.write("")
         time_opts = sorted(full["time_from_treatment_start"].unique())
-        selected_times = st.multiselect(
+        selected_times_raw = st.multiselect(
             "Timepoints to compare", time_opts, default=time_opts,
             key="date_mode_selected_times",
         )
+        # Sorted chronologically, not in click order -- st.multiselect
+        # returns selections in the order they were clicked, so without
+        # this a user who clicks Day 14 before Day 0 would see that
+        # non-chronological order reflected in the comparison below.
+        selected_times = [t for t in time_opts if t in selected_times_raw]
         if len(selected_times) < 2:
             st.info("Select at least 2 timepoints to compare.")
         else:
+            st.caption(
+                "Exploratory result: these timepoints were selected from "
+                "whatever cohort you built above, not a pre-specified "
+                "comparison. p-values from ad hoc slices carry less "
+                "evidentiary weight than a single pre-registered comparison "
+                "and shouldn't be read as confirmatory on their own."
+            )
             group_dfs = {
                 f"Day {t}": filter_dataset(filtered, time_from_treatment_start=[t])
                 for t in selected_times
@@ -1067,9 +1210,23 @@ with tab_date:
                         avg = get_population_averages(df)
                         if not avg.empty:
                             avg_frames.append(avg.assign(timepoint=label))
-                    if avg_frames:
-                        avg_combined = pd.concat(avg_frames, ignore_index=True)
-                        render_avg_charts(avg_combined, "timepoint", date_color_map, key_prefix="date_mode")
+                    avg_combined = pd.concat(avg_frames, ignore_index=True) if avg_frames else pd.DataFrame()
+                    render_avg_table_and_charts(
+                        avg_combined, "date_mode", "timepoint", date_color_map,
+                        group_order=list(group_dfs.keys()),
+                        download_filename="date_comparison_averages.csv",
+                    )
+
+                st.write("")
+                with st.container(border=True):
+                    st.write("**Frequency table**")
+                    freq_frames = []
+                    for label, df in group_dfs.items():
+                        freq = get_filtered_frequency_table(df)
+                        if not freq.empty:
+                            freq_frames.append(freq.assign(timepoint=label))
+                    freq_combined = pd.concat(freq_frames, ignore_index=True) if freq_frames else pd.DataFrame()
+                    render_frequency_table_block(freq_combined, "date_mode", download_filename="date_comparison_frequency.csv")
 
                 st.write("")
                 with st.container(border=True):
@@ -1083,19 +1240,7 @@ with tab_date:
                 st.write("")
                 with st.container(border=True):
                     st.write("**Mann-Whitney U results** (Bonferroni-corrected across all pairs and populations tested)")
-                    st.caption(
-                        "Exploratory result: these timepoints were selected from "
-                        "whatever cohort you built above, not a pre-specified "
-                        "comparison."
-                    )
-                    display_results = results.drop(columns=["status", "small_n_warning"]).copy()
-                    display_results["p_value"] = display_results["p_value"].apply(format_pvalue)
-                    display_results["p_value_bonferroni"] = display_results["p_value_bonferroni"].apply(format_pvalue)
-                    st.dataframe(style_population_column(display_results), width='stretch', hide_index=True)
-                    download_csv_button(
-                        display_results, "date_comparison_stats.csv", "Download this table as CSV",
-                        key="date_mode_stats_download",
-                    )
+                    render_comparison_stats_table(results, "date_mode_stats", "date_comparison_stats.csv")
 
 
 # ---------- Custom: build 2-4 independent cohorts, any filters ----------
@@ -1147,28 +1292,60 @@ with tab_custom:
                 m1.metric(f"{label}: samples", f"{df['sample'].nunique():,}")
                 m2.metric(f"{label}: subjects", f"{df['subject_id'].nunique():,}")
 
+            b1, b2, b3, b4 = st.columns(4)
+            with b1:
+                st.write("**By project**")
+                st.dataframe(combined_cohort_breakdown_table(cohort_dfs_by_label, "samples_per_project"), hide_index=True, width='stretch')
+            with b2:
+                st.write("**By condition**")
+                st.dataframe(combined_cohort_breakdown_table(cohort_dfs_by_label, "subjects_by_condition"), hide_index=True, width='stretch')
+            with b3:
+                st.write("**By treatment**")
+                st.dataframe(combined_cohort_breakdown_table(cohort_dfs_by_label, "subjects_by_treatment"), hide_index=True, width='stretch')
+            with b4:
+                st.write("**By sex**")
+                st.dataframe(combined_cohort_breakdown_table(cohort_dfs_by_label, "subjects_by_sex"), hide_index=True, width='stretch')
+
+        st.write("")
+        st.caption(
+            "Exploratory result: these cohorts were built from whatever "
+            "filters you chose above, not a pre-specified comparison. "
+            "p-values from ad hoc slices carry less evidentiary weight "
+            "than a single pre-registered comparison and shouldn't be read "
+            "as confirmatory on their own."
+        )
         status, results = compare_n_groups(cohort_dfs_by_label)
         render_n_group_messages(status, results)
 
         if status == "ok":
-            colors_in_order = [color_by_label[cohort_labels[s]] for s in active_slots]
+            group_order = [cohort_labels[s] for s in active_slots]
+            colors_in_order = [color_by_label[label] for label in group_order]
 
             st.write("")
             with st.container(border=True):
                 st.write("**Average cell count and relative frequency**")
                 avg_frames = []
-                for slot in active_slots:
-                    label = cohort_labels[slot]
+                for label in group_order:
                     avg = get_population_averages(cohort_dfs_by_label[label])
                     if not avg.empty:
                         avg_frames.append(avg.assign(cohort=label))
-                if avg_frames:
-                    avg_combined = pd.concat(avg_frames, ignore_index=True)
-                    render_avg_charts(avg_combined, "cohort", color_by_label, key_prefix="custom")
-                    download_csv_button(
-                        avg_combined, "custom_comparison_averages.csv", "Download this table as CSV",
-                        key="custom_avg_download",
-                    )
+                avg_combined = pd.concat(avg_frames, ignore_index=True) if avg_frames else pd.DataFrame()
+                render_avg_table_and_charts(
+                    avg_combined, "custom", "cohort", color_by_label,
+                    group_order=group_order,
+                    download_filename="custom_comparison_averages.csv",
+                )
+
+            st.write("")
+            with st.container(border=True):
+                st.write("**Frequency table**")
+                freq_frames = []
+                for label in group_order:
+                    freq = get_filtered_frequency_table(cohort_dfs_by_label[label])
+                    if not freq.empty:
+                        freq_frames.append(freq.assign(cohort=label))
+                freq_combined = pd.concat(freq_frames, ignore_index=True) if freq_frames else pd.DataFrame()
+                render_frequency_table_block(freq_combined, "custom", download_filename="custom_comparison_frequency.csv")
 
             st.write("")
             with st.container(border=True):
@@ -1180,15 +1357,4 @@ with tab_custom:
             st.write("")
             with st.container(border=True):
                 st.write("**Mann-Whitney U results** (Bonferroni-corrected across all pairs and populations tested)")
-                st.caption(
-                    "Exploratory result: these cohorts were built from whatever "
-                    "filters you chose above, not a pre-specified comparison."
-                )
-                display_results = results.drop(columns=["status", "small_n_warning"]).copy()
-                display_results["p_value"] = display_results["p_value"].apply(format_pvalue)
-                display_results["p_value_bonferroni"] = display_results["p_value_bonferroni"].apply(format_pvalue)
-                st.dataframe(style_population_column(display_results), width='stretch', hide_index=True)
-                download_csv_button(
-                    display_results, "custom_comparison_stats.csv", "Download this table as CSV",
-                    key="custom_stats_download",
-                )
+                render_comparison_stats_table(results, "custom_stats", "custom_comparison_stats.csv")
