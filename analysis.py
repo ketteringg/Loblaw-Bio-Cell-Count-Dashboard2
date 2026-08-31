@@ -555,6 +555,97 @@ def compare_n_groups(group_dfs: dict) -> tuple[str, pd.DataFrame | None]:
     return "ok", results
 
 
+def compare_n_groups_paired(group_dfs: dict, pair_on: str = "subject_id") -> tuple[str, pd.DataFrame | None]:
+    """
+    Paired counterpart of compare_n_groups, for groups that are the same
+    subjects measured repeatedly rather than independent cohorts -- the
+    By Date tab's situation: every subject is sampled exactly once at
+    each timepoint, so any cohort's "Day 0" and "Day 14" groups contain
+    the same people. Runs a Wilcoxon signed-rank test per
+    (population, group pair) on per-subject CLR values matched via
+    `pair_on`, i.e. on each subject's own within-subject change. See the
+    README's "Statistical approach" for the rationale and the empirical
+    paired-vs-unpaired comparison on this dataset.
+
+    Subjects present in only one of the two groups are dropped from that
+    pair's test (Wilcoxon needs matched pairs). If a subject ever
+    contributed several samples to one group for one population, its
+    values are averaged before pairing; on the current dataset this is a
+    no-op (one sample per subject per timepoint).
+
+    Same interface and status conventions as compare_n_groups:
+    ("insufficient_groups", None) when fewer than 2 groups have samples;
+    otherwise ("ok", results) with one row per (population, group_a,
+    group_b), where a pair with zero matched subjects gets
+    status="no_individuals" and a null p-value instead of being silently
+    dropped. n_a and n_b both report the number of matched subjects, and
+    the avg_* columns are computed over that matched set. Bonferroni
+    correction runs across all tests that produced a p-value, exactly as
+    in compare_n_groups.
+    """
+    non_empty = {label: df for label, df in group_dfs.items() if not df.empty}
+    if len(non_empty) < 2:
+        return "insufficient_groups", None
+
+    labels = list(non_empty.keys())
+    pairs = list(itertools.combinations(labels, 2))
+
+    populations_present = [
+        p for p in POPULATIONS
+        if any(p in df["population"].unique() for df in non_empty.values())
+    ]
+
+    rows = []
+    for pop in populations_present:
+        for label_a, label_b in pairs:
+            pop_a = non_empty[label_a][non_empty[label_a]["population"] == pop]
+            pop_b = non_empty[label_b][non_empty[label_b]["population"] == pop]
+
+            side_a = pop_a.groupby(pair_on)[["clr", "count", "percentage"]].mean()
+            side_b = pop_b.groupby(pair_on)[["clr", "count", "percentage"]].mean()
+            merged = side_a.join(side_b, how="inner", lsuffix="_a", rsuffix="_b")
+
+            if len(merged) == 0:
+                rows.append({
+                    "population": pop, "group_a": label_a, "group_b": label_b,
+                    "n_a": 0, "n_b": 0,
+                    "avg_count_a": None, "avg_count_b": None,
+                    "avg_pct_a": None, "avg_pct_b": None,
+                    "p_value": None, "status": "no_individuals", "small_n_warning": False,
+                })
+                continue
+
+            diffs = merged["clr_a"] - merged["clr_b"]
+            if (diffs == 0).all():
+                # Degenerate case scipy's wilcoxon refuses (an all-zero
+                # difference vector): no subject changed at all, and "no
+                # evidence of change" is the honest report.
+                p = 1.0
+            else:
+                stat, p = wilcoxon(merged["clr_a"], merged["clr_b"])
+            n = len(merged)
+            rows.append({
+                "population": pop, "group_a": label_a, "group_b": label_b,
+                "n_a": n, "n_b": n,
+                "avg_count_a": round(merged["count_a"].mean(), 2),
+                "avg_count_b": round(merged["count_b"].mean(), 2),
+                "avg_pct_a": round(merged["percentage_a"].mean(), 3),
+                "avg_pct_b": round(merged["percentage_b"].mean(), 3),
+                "p_value": p, "status": "ok",
+                "small_n_warning": n < SMALL_N_THRESHOLD,
+            })
+
+    results = pd.DataFrame(rows)
+    valid = results["p_value"].notna()
+    results.loc[valid, "p_value_bonferroni"] = (
+        results.loc[valid, "p_value"] * valid.sum()
+    ).clip(upper=1.0)
+    results["significant_bonferroni"] = results["p_value_bonferroni"] < 0.05
+    results = results.sort_values("p_value", na_position="last").reset_index(drop=True)
+
+    return "ok", results
+
+
 def compare_populations_paired(df: pd.DataFrame, populations: list) -> tuple[str, pd.DataFrame | None]:
     """
     Compares 2 or more cell populations' relative frequencies directly
