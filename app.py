@@ -487,10 +487,38 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
     1-2%), so a shared y-axis makes real, correctly-computed differences
     visually indistinguishable -- verified directly against real data
     (per-day averages genuinely differ, just by a small amount) before
-    concluding this was a display problem, not a computation bug."""
+    concluding this was a display problem, not a computation bug.
+    Returns None when there are no observed values to plot."""
+    if avg_table.empty:
+        return None
+
+    # Guard at the chart boundary as well as in the aggregation layer:
+    # categorical groupby results may contain unused levels with NaN
+    # averages and n_samples == 0. They must not reserve a bar or facet.
+    required = list(dict.fromkeys(["population", color_col, y_col]))
+    chart_data = avg_table.dropna(subset=required).copy()
+    if "n_samples" in chart_data.columns:
+        chart_data = chart_data.loc[chart_data["n_samples"] > 0].copy()
+    if chart_data.empty:
+        return None
+
+    # Pass observed values, without pandas' retained category metadata,
+    # to Plotly. Copy orders so neither the caller nor the other chart
+    # can reintroduce categories absent from this chart's actual data.
+    for column in dict.fromkeys(["population", color_col]):
+        if isinstance(chart_data[column].dtype, pd.CategoricalDtype):
+            chart_data[column] = chart_data[column].astype(object)
+    category_orders = {
+        column: [value for value in order if value in chart_data[column].unique()]
+        for column, order in category_orders.items()
+        if column in chart_data.columns
+    }
+    present_populations = [p for p in POPULATIONS if p in chart_data["population"].unique()]
+    category_orders["population"] = present_populations
+
     if is_comparison:
         fig = px.bar(
-            avg_table, x=color_col, y=y_col, color=color_col,
+            chart_data, x=color_col, y=y_col, color=color_col,
             color_discrete_map=color_map, facet_col="population", facet_col_wrap=5,
             title=title, labels={y_col: y_label}, category_orders=category_orders,
         )
@@ -504,9 +532,16 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
         fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
     else:
         fig = px.bar(
-            avg_table, x="population", y=y_col, color=color_col,
-            color_discrete_map=color_map, barmode="group",
+            chart_data, x="population", y=y_col, color=color_col,
+            # Each population has one bar. Grouping its color traces
+            # reserves empty side-by-side slots for the other populations.
+            color_discrete_map=color_map, barmode="overlay",
             title=title, labels={y_col: y_label}, category_orders=category_orders,
+        )
+        fig.update_xaxes(
+            type="category", categoryorder="array", categoryarray=present_populations,
+            tickmode="array", tickvals=present_populations, ticktext=present_populations,
+            range=[-0.5, len(present_populations) - 0.5],
         )
         fig.update_yaxes(gridcolor="#000000", gridwidth=0.5)
         if yaxis_tickformat:
@@ -547,19 +582,26 @@ def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, 
         category_orders[color_col] = group_order
     is_comparison = color_col != "population"
 
-    chart_col1, chart_col2 = st.columns(2)
-    with chart_col1:
-        fig_count = _build_avg_bar_chart(
-            avg_table, "avg_count", "avg. cell count", "Average number of cells",
-            color_col, color_map, category_orders, is_comparison, yaxis_tickformat=",",
-        )
-        st.plotly_chart(fig_count, width='stretch', key=f"{key_prefix}_avg_count_chart")
-    with chart_col2:
-        fig_pct = _build_avg_bar_chart(
-            avg_table, "avg_percentage", "avg. % of total cells", "Average relative frequency",
-            color_col, color_map, category_orders, is_comparison,
-        )
-        st.plotly_chart(fig_pct, width='stretch', key=f"{key_prefix}_avg_pct_chart")
+    fig_count = _build_avg_bar_chart(
+        avg_table, "avg_count", "avg. cell count", "Average number of cells",
+        color_col, color_map, category_orders, is_comparison, yaxis_tickformat=",",
+    )
+    fig_pct = _build_avg_bar_chart(
+        avg_table, "avg_percentage", "avg. % of total cells", "Average relative frequency",
+        color_col, color_map, category_orders, is_comparison,
+    )
+    charts = [
+        (fig, key) for fig, key in [
+            (fig_count, f"{key_prefix}_avg_count_chart"),
+            (fig_pct, f"{key_prefix}_avg_pct_chart"),
+        ] if fig is not None
+    ]
+    if not charts:
+        st.info("No data available for this cohort.")
+        return
+    for column, (fig, key) in zip(st.columns(len(charts)), charts):
+        with column:
+            st.plotly_chart(fig, width='stretch', key=key)
 
 
 def render_cohort_summary_block(df: pd.DataFrame):
