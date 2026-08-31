@@ -1,0 +1,6 @@
+population,n_responders,n_non_responders,median_responder_pct,median_non_responder_pct,p_value,p_value_bonferroni,significant_bonferroni
+cd4_t_cell,993,975,30.221,29.658,0.0025087080074843093,0.012543540037421547,True
+b_cell,993,975,9.432,9.788,0.13637018820665273,0.6818509410332636,False
+nk_cell,993,975,14.509,14.799,0.3362516863552826,1.0,False
+monocyte,993,975,19.61,19.942,0.5975502102724124,1.0,False
+cd8_t_cell,993,975,24.728,24.603,0.6058918453371946,1.0,False
