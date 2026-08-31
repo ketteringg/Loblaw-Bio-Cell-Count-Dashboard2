@@ -91,6 +91,16 @@ def test_baseline_melanoma_sample_count(conn):
     assert len(baseline) == 656
 
 
+def test_baseline_melanoma_samples_treatment_column(conn):
+    """Regression test for the exact question this column exists to
+    answer directly from the file, without needing to read the query:
+    every row's treatment is 'miraclib', since that's one of the WHERE
+    conditions get_baseline_melanoma_samples filters on."""
+    baseline = get_baseline_melanoma_samples(conn)
+    assert "treatment" in baseline.columns
+    assert (baseline["treatment"] == "miraclib").all()
+
+
 def test_baseline_summary_breakdowns(conn):
     summary = get_baseline_summary(conn)
     assert summary["samples_per_project"]["n_samples"].sum() == 656
