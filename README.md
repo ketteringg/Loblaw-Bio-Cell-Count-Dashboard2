@@ -36,6 +36,31 @@ streamlit run app.py
 Tested with Python 3.12 and the exact package versions pinned in
 `requirements.txt`.
 
+
+
+
+## Part 2: frequency table
+
+Reproducible via `make pipeline` (writes `part2_frequency_table.csv`) or 
+the same filters in the dashboard's Default tab.
+
+
+## Statistical approach (Part 3)
+
+Reproducible via `make pipeline` (writes `part3_boxplot_responders.png` 
+and `part3_stats_results.csv`) or the same filters in the dashboard's Default 
+tab.
+
+
+## Part 4: baseline cohort summary
+
+Reproducible via `make pipeline` (writes `part4_baseline_melanoma_samples.csv` 
+and `part4_summary.txt`) or the same filters in the dashboard's Default tab.
+
+
+
+
+
 ## Self-initializing database
 
 `app.py` checks for `cell_counts.db` on startup. If it's missing but
@@ -228,6 +253,9 @@ expected values are updated.
 
 ## Part 2: frequency table
 
+Reminder: reproducible via `make pipeline` (writes `part2_frequency_table.csv`) or 
+the same filters in the dashboard's Default tab.
+
 `percentage` and "relative frequency" are the same quantity, per the
 assignment's own column definition ("relative frequency in percentage").
 `get_frequency_table()` computes it exactly as specified:
@@ -244,6 +272,10 @@ statistic; no transform (like the CLR used for Part 3's significance
 test) is applied here.
 
 ## Statistical approach (Part 3)
+
+Reminder: reproducible via `make pipeline` (writes `part3_boxplot_responders.png` 
+and `part3_stats_results.csv`) or the same filters in the dashboard's Default 
+tab.
 
 Responders vs. non-responders are compared per cell population using the
 **Mann-Whitney U test** rather than a t-test. Cell-frequency data is
@@ -313,8 +345,7 @@ Non-responder tab.
 whether its comparison groups are independent:
 
 - **Responder vs Non-responder** and **Custom** compare different sets
-  of subjects -- genuinely independent groups -- and use the unpaired
-  **Mann-Whitney U** test on CLR values.
+  of subjects and use the unpaired Mann-Whitney U test on CLR values.
 - **By Population** compares measurements taken from the same samples
   (one sample's `b_cell%` against its own `cd4_t_cell%`, tied together
   by the closure constraint), so it uses the paired **Wilcoxon
@@ -337,12 +368,11 @@ correction across the tab's 15 tests (p=0.0103, corrected ~0.15);
 tested paired, it does (p=0.0032, corrected ~0.048). A regression test
 pins this exact divergence
 (`test_paired_by_date_finds_the_responder_cd4_trend_unpaired_misses`).
-The asymmetry is worth stating: an unpaired test on paired data costs
-sensitivity, not validity -- it can miss real within-subject changes
-but does not manufacture false positives -- which is also why this
-distinction never touched Part 3, where responders and non-responders
-are different people and unpaired Mann-Whitney is exactly the right
-tool.
+Note: an unpaired test on paired data costs sensitivity. It can miss 
+real within-subject changes but does not manufacture false positives
+which is also why this distinction never touched Part 3, where responders
+and non-responders are different people and unpaired Mann-Whitney is 
+the right tool.
 
 ## Confounder check
 
@@ -473,6 +503,9 @@ the underlying data changes.
 
 ## Part 4: baseline cohort summary
 
+Reminder: Reproducible via `make pipeline` (writes `part4_baseline_melanoma_samples.csv` 
+and `part4_summary.txt`) or the same filters in the dashboard's Default tab.
+
 Filtered to melanoma, PBMC, miraclib-treated, baseline
 (`time_from_treatment_start = 0`):
 
@@ -484,9 +517,7 @@ Filtered to melanoma, PBMC, miraclib-treated, baseline
 (Response/sex counts are per-subject, not per-sample, since each subject
 has exactly one response and sex value.)
 
-Reproducible via `make pipeline` (writes
-`part4_baseline_melanoma_samples.csv` and `part4_summary.txt`) or the
-same filters in the dashboard's Default tab.
+
 
 ## Known limitations
 
