@@ -42,20 +42,19 @@ Tested with Python 3.12 and the exact package versions pinned in
 ## Part 2: Frequency Table
 
 Reproducible via `make pipeline` (writes `part2_frequency_table.csv`) or 
-the same filters in the dashboard's Default tab.
+the same filters in the dashboard.
 
 
 ## Part 3: Statistical Approach 
 
 Reproducible via `make pipeline` (writes `part3_boxplot_responders.png` 
-and `part3_stats_results.csv`) or the same filters in the dashboard's Default 
-tab.
+and `part3_stats_results.csv`) or the same filters in the dashboard.
 
 
 ## Part 4: Baseline Cohort Summary
 
 Reproducible via `make pipeline` (writes `part4_baseline_melanoma_samples.csv` 
-and `part4_summary.txt`) or the same filters in the dashboard's Default tab.
+and `part4_summary.txt`) or the same filters in the dashboard.
 
 
 
@@ -254,7 +253,7 @@ expected values are updated.
 ## Part 2: Frequency Table
 
 Reminder: reproducible via `make pipeline` (writes `part2_frequency_table.csv`) or 
-the same filters in the dashboard's Default tab.
+the same filters in the dashboard.
 
 `percentage` and "relative frequency" are the same quantity, per the
 assignment's own column definition ("relative frequency in percentage").
@@ -274,8 +273,7 @@ test) is applied here.
 ## Part 3: Statistical Approach 
 
 Reminder: reproducible via `make pipeline` (writes `part3_boxplot_responders.png` 
-and `part3_stats_results.csv`) or the same filters in the dashboard's Default 
-tab.
+and `part3_stats_results.csv`) or the same filters in the dashboard.
 
 Responders vs. non-responders are compared per cell population using the
 **Mann-Whitney U test** rather than a t-test. Cell-frequency data is
@@ -504,7 +502,7 @@ the underlying data changes.
 ## Part 4: Baseline Cohort Summary
 
 Reminder: Reproducible via `make pipeline` (writes `part4_baseline_melanoma_samples.csv` 
-and `part4_summary.txt`) or the same filters in the dashboard's Default tab.
+and `part4_summary.txt`) or the same filters in the dashboard.
 
 Filtered to melanoma, PBMC, miraclib-treated, baseline
 (`time_from_treatment_start = 0`):
