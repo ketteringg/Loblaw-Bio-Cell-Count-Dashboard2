@@ -564,24 +564,22 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
     darkened, fully opaque outline, but keeps this change scoped to
     opacity specifically rather than also changing the outline's color."""
     if is_comparison:
-        # facet_col_spacing widened substantially (from an earlier
-        # 0.045, which still wasn't enough) to leave real room for the
-        # longest population names ("cd8_t_cell", "cd4_t_cell", 10
-        # characters) at each facet's own x-axis title below. There is a
-        # hard mathematical ceiling here: with 5 facets, spacing must
-        # stay below 1/(5-1) = 0.25, or facets themselves shrink to zero
-        # width and the bars disappear entirely. 0.12 is a substantial,
-        # deliberate increase that stays well clear of that ceiling,
-        # balancing "enough room for the text" against "bars still wide
-        # enough to be usable," rather than chasing the exact pixel-perfect
-        # value, which isn't reliably computable without a real browser
-        # to render against (confirmed directly: multiple earlier
-        # attempts at computing an exact-fit value from assumed pixel
-        # widths were each insufficient in practice).
+        # facet_col_spacing widened again (0.045 was not enough, then
+        # 0.12 was still not enough per direct user feedback against the
+        # rendered chart). 0.16 stays comfortably clear of the hard
+        # mathematical ceiling for 5 facets (spacing must stay below
+        # 1/(5-1) = 0.25, or facet width hits zero and the bars
+        # disappear), while giving noticeably more room than the
+        # previous attempt. Combined with a smaller axis-title font
+        # (9px, down from 10px) below. An exact pixel-perfect value
+        # isn't reliably computable without a real browser to render
+        # against; this is a deliberately more aggressive value given
+        # two prior attempts were each confirmed insufficient in
+        # practice, not a guess repeated a third time.
         fig = px.bar(
             avg_table, x=color_col, y=y_col, color=color_col,
             color_discrete_map=color_map, facet_col="population", facet_col_wrap=5,
-            facet_col_spacing=0.12,
+            facet_col_spacing=0.16,
             title=title, labels={y_col: y_label}, category_orders=category_orders,
         )
         fig.update_yaxes(matches=None)
@@ -599,14 +597,23 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
         #
         # Each facet's axis range is set explicitly to [0, top], the
         # same top _aligned_gridline_values used to compute that facet's
-        # gridlines, not left to Plotly's own auto-range. Without this,
-        # gridlines could be correct in isolation but still land at a
-        # different fraction of each facet's actual rendered height,
-        # since Plotly's auto-range typically pads a little further
-        # above the tallest bar than a manually-computed top does,
-        # confirmed directly against a real screenshot where independently
-        # "nice" gridlines per facet visibly did not line up with each
-        # other across the chart.
+        # gridlines, not left to Plotly's own auto-range, so gridline i
+        # always lands at exactly i/5 of every facet's own height.
+        #
+        # The gridlines themselves are drawn once per level (6 levels:
+        # 0/5 through 5/5), as ONE shape spanning the entire chart width
+        # (xref="paper"), not once per facet confined to that facet's own
+        # domain. An earlier version drew 5 separate segments, one per
+        # facet, which were correctly aligned with each other but still
+        # visibly broken into disconnected dashes rather than one
+        # continuous line across the chart, confirmed directly against a
+        # real screenshot and against the single continuous gridlines the
+        # Default/By Population tabs' single-axis charts already show.
+        # This works because every facet's y-axis shares the exact same
+        # vertical domain [0.0, 1.0] (confirmed directly on the real
+        # rendered figure) since facet_col_wrap=5 puts all 5 in one row,
+        # not stacked into multiple rows, so "y domain" from any one
+        # facet's axis is valid for all of them at once.
         for i, pop in enumerate(category_orders["population"]):
             xaxis_suffix = "" if i == 0 else str(i + 1)
             pop_max = avg_table.loc[avg_table["population"] == pop, y_col].max()
@@ -615,12 +622,14 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
             fig.layout[f"yaxis{xaxis_suffix}"].zeroline = False
             fig.layout[f"yaxis{xaxis_suffix}"].tickvals = gridlines
             fig.layout[f"yaxis{xaxis_suffix}"].range = [0, top]
-            for g in gridlines:
-                fig.add_shape(
-                    type="line", xref=f"x{xaxis_suffix} domain", yref=f"y{xaxis_suffix}",
-                    x0=0, x1=1, y0=g, y1=g,
-                    line=dict(color="#000000", width=0.5), layer="below",
-                )
+        n_gridlines = len(_aligned_gridline_values(1)[0])
+        for level in range(n_gridlines):
+            relative_y = level / (n_gridlines - 1)
+            fig.add_shape(
+                type="line", xref="paper", yref="y domain",
+                x0=0, x1=1, y0=relative_y, y1=relative_y,
+                line=dict(color="#000000", width=1), layer="below",
+            )
         if yaxis_tickformat:
             fig.update_yaxes(tickformat=yaxis_tickformat)
         # showticklabels=False only hides the per-bar tick labels
@@ -640,7 +649,7 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
         for i, pop in enumerate(category_orders["population"]):
             xaxis_suffix = "" if i == 0 else str(i + 1)
             fig.layout[f"xaxis{xaxis_suffix}"].title = dict(
-                text=pop, font=dict(size=10, color="#374151"),
+                text=pop, font=dict(size=9, color="#374151"),
             )
     else:
         fig = px.bar(
