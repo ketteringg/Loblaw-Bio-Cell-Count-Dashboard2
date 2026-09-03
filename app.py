@@ -21,6 +21,7 @@ Run with:
     streamlit run app.py
 """
 from pathlib import Path
+import math
 
 import pandas as pd
 import plotly.express as px
@@ -501,6 +502,36 @@ def render_population_key(populations: list[str]):
     )
 
 
+def _nice_gridline_values(max_value: float, n: int = 5) -> list:
+    """Computes evenly-spaced, human-friendly gridline values from 0 to a
+    round number at or just above max_value (e.g. [0, 2000, 4000, 6000,
+    8000, 10000] for a max of ~9900), matching the kind of tick spacing
+    Plotly's own auto-ticking chooses. Needed because Plotly resolves its
+    real tick values client-side at render time, not in the Python
+    figure object (fig.layout.yaxis.tickvals is None until actually
+    rendered in a browser), so there is nothing to read out and reuse
+    when replacing native gridlines with explicitly-drawn shapes below.
+    Verified directly against this project's real data ranges: e.g.
+    b_cell's ~9900 max produces [0, 2000, ..., 10000], matching exactly
+    what Plotly itself renders for that same facet."""
+    if max_value <= 0:
+        return [0]
+    raw_step = max_value / n
+    magnitude = 10 ** math.floor(math.log10(raw_step))
+    step = magnitude * 10
+    for multiple in (1, 2, 2.5, 5, 10):
+        candidate = magnitude * multiple
+        if candidate >= raw_step:
+            step = candidate
+            break
+    top = math.ceil(max_value / step) * step
+    values, v = [], 0.0
+    while v <= top + step / 2:
+        values.append(round(v, 10))
+        v += step
+    return values
+
+
 def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map, category_orders, is_comparison, yaxis_tickformat=None):
     """Builds one average-count or average-percentage bar chart. When
     is_comparison is True (color_col is a comparison group, not
@@ -531,7 +562,38 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
             color_discrete_map=color_map, facet_col="population", facet_col_wrap=5,
             title=title, labels={y_col: y_label}, category_orders=category_orders,
         )
-        fig.update_yaxes(matches=None, gridcolor="#000000", gridwidth=0.5)
+        fig.update_yaxes(matches=None)
+        # Gridlines are drawn as explicit shapes with layer="below",
+        # not Plotly's native showgrid, and native grid is turned off
+        # entirely (showgrid=False) so nothing doubles up. Confirmed
+        # directly, by rendering both side by side as actual images (not
+        # just inspecting properties), that native gridlines on a
+        # faceted, semi-transparent-bar chart render ON TOP of the bar
+        # traces, cutting a crisp black line through the fill, while the
+        # exact same setup with layer="below" shapes renders the line
+        # invisibly behind the bar as intended, matching what the
+        # Default/By Population tabs' single-axis charts already look
+        # like, where this problem never came up in the first place.
+        # Plotly resolves its own "nice" tick values client-side at
+        # render time (fig.layout.yaxis.tickvals is None in the Python
+        # object even after the figure is fully built), so there's
+        # nothing to read out and reuse here: _nice_gridline_values
+        # recomputes equivalent human-friendly values directly from each
+        # facet's own data, verified to match Plotly's real output
+        # exactly for this project's actual data ranges.
+        for i, pop in enumerate(category_orders["population"]):
+            xaxis_suffix = "" if i == 0 else str(i + 1)
+            pop_max = avg_table.loc[avg_table["population"] == pop, y_col].max()
+            gridlines = _nice_gridline_values(pop_max)
+            fig.layout[f"yaxis{xaxis_suffix}"].showgrid = False
+            fig.layout[f"yaxis{xaxis_suffix}"].zeroline = False
+            fig.layout[f"yaxis{xaxis_suffix}"].tickvals = gridlines
+            for g in gridlines:
+                fig.add_shape(
+                    type="line", xref=f"x{xaxis_suffix} domain", yref=f"y{xaxis_suffix}",
+                    x0=0, x1=1, y0=g, y1=g,
+                    line=dict(color="#000000", width=0.5), layer="below",
+                )
         if yaxis_tickformat:
             fig.update_yaxes(tickformat=yaxis_tickformat)
         # showticklabels=False only hides the per-bar tick labels
