@@ -502,34 +502,41 @@ def render_population_key(populations: list[str]):
     )
 
 
-def _nice_gridline_values(max_value: float, n: int = 5) -> list:
-    """Computes evenly-spaced, human-friendly gridline values from 0 to a
-    round number at or just above max_value (e.g. [0, 2000, 4000, 6000,
-    8000, 10000] for a max of ~9900), matching the kind of tick spacing
-    Plotly's own auto-ticking chooses. Needed because Plotly resolves its
-    real tick values client-side at render time, not in the Python
-    figure object (fig.layout.yaxis.tickvals is None until actually
-    rendered in a browser), so there is nothing to read out and reuse
-    when replacing native gridlines with explicitly-drawn shapes below.
-    Verified directly against this project's real data ranges: e.g.
-    b_cell's ~9900 max produces [0, 2000, ..., 10000], matching exactly
-    what Plotly itself renders for that same facet."""
+def _aligned_gridline_values(max_value: float, n: int = 5):
+    """Computes n+1 evenly-spaced gridline values (0 through a padded,
+    rounded top), and that same top, for one facet's own y-axis.
+
+    Returns (values, top). Callers must set that facet's own axis range
+    to exactly [0, top] as well, not just draw gridlines at these values:
+    two facets computing independent "nice round number" gridlines from
+    their own raw data maxima don't generally land at the same relative
+    height, even if each individually looks reasonable, because a nice
+    step for one facet's maximum (e.g. 2000) doesn't divide the same
+    number of times into a different facet's maximum. This instead
+    forces every facet to use the same number of equal divisions (n) of
+    its own [0, top] range, so gridline i always sits at exactly i/n of
+    every facet's own height, aligning across facets regardless of the
+    actual values each one represents. Confirmed against a real
+    screenshot that plain "nice round number" gridlines, correct on
+    their own, visibly do not align across facets this way. Each
+    facet's own [0, top] range still reflects only its own data
+    (matches=None elsewhere in this file, not a shared axis), so real
+    within-population differences a shared scale would hide stay
+    visible; only the gridline count and relative spacing are
+    standardized, not the values themselves."""
     if max_value <= 0:
-        return [0]
-    raw_step = max_value / n
-    magnitude = 10 ** math.floor(math.log10(raw_step))
-    step = magnitude * 10
-    for multiple in (1, 2, 2.5, 5, 10):
+        max_value = 1
+    padded = max_value * 1.08
+    magnitude = 10 ** math.floor(math.log10(padded))
+    top = magnitude * 10
+    for multiple in (1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10):
         candidate = magnitude * multiple
-        if candidate >= raw_step:
-            step = candidate
+        if candidate >= padded:
+            top = candidate
             break
-    top = math.ceil(max_value / step) * step
-    values, v = [], 0.0
-    while v <= top + step / 2:
-        values.append(round(v, 10))
-        v += step
-    return values
+    step = top / n
+    values = [round(step * i, 10) for i in range(n + 1)]
+    return values, top
 
 
 def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map, category_orders, is_comparison, yaxis_tickformat=None):
@@ -557,9 +564,24 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
     darkened, fully opaque outline, but keeps this change scoped to
     opacity specifically rather than also changing the outline's color."""
     if is_comparison:
+        # facet_col_spacing widened substantially (from an earlier
+        # 0.045, which still wasn't enough) to leave real room for the
+        # longest population names ("cd8_t_cell", "cd4_t_cell", 10
+        # characters) at each facet's own x-axis title below. There is a
+        # hard mathematical ceiling here: with 5 facets, spacing must
+        # stay below 1/(5-1) = 0.25, or facets themselves shrink to zero
+        # width and the bars disappear entirely. 0.12 is a substantial,
+        # deliberate increase that stays well clear of that ceiling,
+        # balancing "enough room for the text" against "bars still wide
+        # enough to be usable," rather than chasing the exact pixel-perfect
+        # value, which isn't reliably computable without a real browser
+        # to render against (confirmed directly: multiple earlier
+        # attempts at computing an exact-fit value from assumed pixel
+        # widths were each insufficient in practice).
         fig = px.bar(
             avg_table, x=color_col, y=y_col, color=color_col,
             color_discrete_map=color_map, facet_col="population", facet_col_wrap=5,
+            facet_col_spacing=0.12,
             title=title, labels={y_col: y_label}, category_orders=category_orders,
         )
         fig.update_yaxes(matches=None)
@@ -574,20 +596,25 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
         # invisibly behind the bar as intended, matching what the
         # Default/By Population tabs' single-axis charts already look
         # like, where this problem never came up in the first place.
-        # Plotly resolves its own "nice" tick values client-side at
-        # render time (fig.layout.yaxis.tickvals is None in the Python
-        # object even after the figure is fully built), so there's
-        # nothing to read out and reuse here: _nice_gridline_values
-        # recomputes equivalent human-friendly values directly from each
-        # facet's own data, verified to match Plotly's real output
-        # exactly for this project's actual data ranges.
+        #
+        # Each facet's axis range is set explicitly to [0, top], the
+        # same top _aligned_gridline_values used to compute that facet's
+        # gridlines, not left to Plotly's own auto-range. Without this,
+        # gridlines could be correct in isolation but still land at a
+        # different fraction of each facet's actual rendered height,
+        # since Plotly's auto-range typically pads a little further
+        # above the tallest bar than a manually-computed top does,
+        # confirmed directly against a real screenshot where independently
+        # "nice" gridlines per facet visibly did not line up with each
+        # other across the chart.
         for i, pop in enumerate(category_orders["population"]):
             xaxis_suffix = "" if i == 0 else str(i + 1)
             pop_max = avg_table.loc[avg_table["population"] == pop, y_col].max()
-            gridlines = _nice_gridline_values(pop_max)
+            gridlines, top = _aligned_gridline_values(pop_max)
             fig.layout[f"yaxis{xaxis_suffix}"].showgrid = False
             fig.layout[f"yaxis{xaxis_suffix}"].zeroline = False
             fig.layout[f"yaxis{xaxis_suffix}"].tickvals = gridlines
+            fig.layout[f"yaxis{xaxis_suffix}"].range = [0, top]
             for g in gridlines:
                 fig.add_shape(
                     type="line", xref=f"x{xaxis_suffix} domain", yref=f"y{xaxis_suffix}",
@@ -608,22 +635,12 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
         # Population names moved from the top facet-title annotation to
         # each facet's own x-axis title (blanking the annotation
         # entirely), matching render_boxplot's approach for the identical
-        # 5-facets-in-half-the-page-width problem. Two earlier attempts
-        # here both tried to make the top annotation fit (shrinking font,
-        # widening facet_col_spacing, then staggering onto two heights)
-        # and kept needing another round of tuning. The boxplot doesn't
-        # have this problem at all, and doesn't even set an explicit
-        # facet_col_spacing: an axis title is anchored to its own facet's
-        # domain, unlike a free-floating annotation, which visually
-        # overflows into the neighboring facet whenever its text is
-        # wider than that facet's own share of the width. Matching an
-        # already-working pattern instead of tuning a fundamentally
-        # collision-prone one.
+        # 5-facets-in-half-the-page-width problem.
         fig.for_each_annotation(lambda a: a.update(text=""))
         for i, pop in enumerate(category_orders["population"]):
             xaxis_suffix = "" if i == 0 else str(i + 1)
             fig.layout[f"xaxis{xaxis_suffix}"].title = dict(
-                text=pop, font=dict(size=11, color="#374151"),
+                text=pop, font=dict(size=10, color="#374151"),
             )
     else:
         fig = px.bar(
