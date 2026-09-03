@@ -11,9 +11,11 @@ filtered cohorts). Every comparison tab shares the same section order
 (cohort summary, average table + charts, frequency table, distribution
 boxplot, stats table) and the same stats-table controls (grouped by cell
 type by default, with a toggle to surface significant results instead).
-There are no fixed tabs for the assignment's Part 2/3/4 cohorts; those
-are reproduced by setting the equivalent filters (see README.md, "Code
-structure and why").
+There are no fixed tabs for the assignment's Part 2/3/4 cohorts
+specifically -- those are special cases of what these tabs already
+produce by setting the equivalent filters, so a dedicated tab for each
+would just be showing the same underlying data twice. See README.md for
+how to reproduce those specific answers.
 
 Run with:
     streamlit run app.py
@@ -37,7 +39,6 @@ from analysis import (
     get_filtered_frequency_table,
     get_population_averages,
     compare_n_groups,
-    compare_n_groups_paired,
     compare_populations_paired,
 )
 
@@ -99,10 +100,18 @@ GROUP_FILL_ALPHA = 0.55
 # population key swatches -- all deliberately share this one constant so
 # they stay visually consistent with each other).
 #
-# Moderate rather than very light: 0.15 reads too faint, especially as a
-# bar-chart fill. Kept well short of full opacity, where the saturated,
-# differently-hued facet backgrounds make identical gridlines appear to
-# vary in thickness depending on the background they cross.
+# Moderate rather than very light: 0.15 read as too faint, especially as a
+# bar-chart fill (bars need to be clearly visible as the primary data
+# there, not just a background wash). Kept well short of full opacity,
+# though, because of documented history: at full opacity, the strongly
+# saturated, differently-hued backgrounds behind each boxplot facet
+# created a real optical effect where identical gridlines appeared to
+# have different thickness depending on which background they crossed
+# (confirmed the gridlines themselves were byte-for-byte identical across
+# every facet -- same width, color, range, tick spacing -- so the
+# apparent inconsistency was purely the background contrast). That issue
+# was specifically observed near full opacity, not at this more moderate
+# level, but the margin is deliberate rather than assumed safe.
 POPULATION_BACKGROUND_OPACITY = 0.3
 
 CUSTOM_CSS = """
@@ -227,8 +236,8 @@ def darken_hex(hex_color: str, factor: float = 0.35) -> str:
     """Returns a darker shade of hex_color (multiplies each RGB channel
     toward 0 by `factor`). Used for box outlines/median lines: Plotly's
     Box trace has exactly one `line` property that controls BOTH the
-    outline and the median line (there is no separate median styling),
-    so setting it identical to fillcolor makes the
+    outline and the median line (verified directly -- there's no separate
+    median styling), so setting it identical to fillcolor makes the
     median line invisible against the fill. A darker shade keeps both
     visible without introducing a third color."""
     def to_rgb(h):
@@ -269,8 +278,10 @@ def render_boxplot(
     Returns (fig, present_populations): present_populations is the exact,
     already-computed list of populations this figure actually faceted,
     in the exact order they were graphed. Callers should pass this
-    directly to render_population_key rather than recomputing the list,
-    so the key always matches what was actually graphed.
+    directly to render_population_key rather than recomputing their own
+    guess at the same list -- two independent computations of "which
+    populations, in what order" can drift apart if either one's filtering
+    logic changes later, even though they happen to agree today.
     """
     groups = group_order or sorted(comparison_df[x_col].dropna().unique())
     default_colors = ["#6B7280", "#9CA3AF", "#D1D5DB", "#4B5563", "#111827", "#78716C"]
@@ -278,12 +289,19 @@ def render_boxplot(
 
     # Computed BEFORE building the figure, and used directly in
     # category_orders below -- this must be the actual list of facets
-    # Plotly creates. Plotly Express creates one facet per
-    # category_orders entry even when a category has zero matching rows,
-    # and the loops below position backgrounds/labels/titles by index
-    # (present_populations[i] -> facet slot i), so passing the full
-    # POPULATIONS constant here would both produce empty facets and
-    # misalign every facet-indexed element onto the wrong facet.
+    # Plotly creates. Passing the full POPULATIONS constant instead (all
+    # 5, regardless of what's actually in comparison_df) was a real bug:
+    # Plotly Express creates one facet per category_orders entry even
+    # when a category has zero matching rows, so a population-filtered
+    # cohort (e.g. just b_cell + cd4_t_cell selected) produced 5 facets,
+    # 3 of them empty with Plotly's raw unprocessed "population=X" title
+    # text (never reached by the p-value-replacement loop below, which
+    # only iterates present populations). Worse, the later loops that
+    # position backgrounds/labels/titles by index (present_populations[i]
+    # -> facet slot i) silently landed on the WRONG facet whenever an
+    # empty facet was interspersed before a present one in canonical
+    # order -- e.g. cd4_t_cell's own label rendering on cd8_t_cell's
+    # empty facet, confirmed directly against a real filtered cohort.
     present_populations = [p for p in POPULATIONS if p in comparison_df["population"].unique()]
 
     fig = px.box(
@@ -348,8 +366,9 @@ def render_boxplot(
     # bound lands exactly on 0 (see y_range above), so Plotly's separate
     # zero-line was stacking directly on top of the regular gridline at
     # that same position, rendering as a visibly thicker line there than
-    # at any other tick. Tick labels are shown on every facet (not just the
-    # first), even though the scale is shared.
+    # at any other tick -- confirmed by checking the computed range, not
+    # just guessed. Tick labels are shown on every facet (not just the
+    # first), even though the scale is shared, per explicit request.
     fig.update_yaxes(
         matches="y", range=y_range,
         gridcolor="#000000", gridwidth=0.5,
@@ -451,10 +470,15 @@ def render_population_key(populations: list[str]):
 
     `populations` should be the exact list render_boxplot/
     render_n_group_boxplot returned as their second value (the
-    present_populations they actually faceted, already in graphed order),
-    not independently recomputed from a stats table. This function still
-    deduplicates and canonical-orders its input defensively, but the
-    caller contract is "pass what was actually graphed."
+    present_populations they actually faceted, already in graphed order)
+    -- not independently recomputed from a stats table. Passing
+    results["population"].tolist() used to work by coincidence (both
+    computations happened to apply the same canonical-order filter), but
+    that's fragile: two independent computations of "which populations,
+    in what order" can silently drift apart if either one's logic changes
+    later. This function still deduplicates and canonical-orders its
+    input defensively, but the caller contract is now "pass what was
+    actually graphed."
 
     Swatch color uses POPULATION_BACKGROUND_OPACITY, matching the actual
     facet background opacity exactly -- rather than a solid, fully opaque
@@ -480,13 +504,16 @@ def render_population_key(populations: list[str]):
 def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map, category_orders, is_comparison, yaxis_tickformat=None):
     """Builds one average-count or average-percentage bar chart. When
     is_comparison is True (color_col is a comparison group, not
-    population), facets by population on a shared y-axis (matches='y',
-    like the boxplot), so between-population scale differences (e.g.
-    b_cell ~10k cells vs cd4_t_cell ~30k) read directly from bar
-    heights. Within-population differences across comparison groups are
-    often under 1-2%, too small to read from zero-based bars at any
-    scale; the averages table and the stats table are the right place
-    to read those.
+    population), facets by population instead of putting population on
+    the shared x-axis, deliberately WITHOUT matches='y' (unlike the
+    boxplot), so each population gets its own independently-scaled
+    y-axis. This matters concretely: between-population variation (e.g.
+    b_cell ~10k cells vs cd4_t_cell ~30k) is far larger than
+    within-population variation across comparison groups (often under
+    1-2%), so a shared y-axis makes real, correctly-computed differences
+    visually indistinguishable. Verified directly against real data
+    (per-day averages genuinely differ, just by a small amount) before
+    concluding this was a display problem, not a computation bug.
 
     Both branches use marker_opacity=GROUP_FILL_ALPHA, the same value
     the boxplot fills use (see render_boxplot), so the same population
@@ -502,20 +529,33 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
         fig = px.bar(
             avg_table, x=color_col, y=y_col, color=color_col,
             color_discrete_map=color_map, facet_col="population", facet_col_wrap=5,
+            facet_col_spacing=0.045,
             title=title, labels={y_col: y_label}, category_orders=category_orders,
         )
-        # Shared y scale across all facets; rationale in the docstring above.
-        fig.update_yaxes(matches="y", gridcolor="#000000", gridwidth=0.5)
+        fig.update_yaxes(matches=None, gridcolor="#000000", gridwidth=0.5)
         if yaxis_tickformat:
             fig.update_yaxes(tickformat=yaxis_tickformat)
-        fig.update_xaxes(showticklabels=False, title_text=None)
-        fig.update_layout(
-            legend_title_text=color_col.replace("_label", "").replace("_", " ").capitalize()
-        )
+        fig.update_xaxes(showticklabels=False)
         fig.update_traces(marker_line_width=1.5, marker_opacity=GROUP_FILL_ALPHA)
         for trace in fig.data:
             trace.marker.line.color = trace.marker.color
-        fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
+        # Facet titles default to no explicit font size (falls back to
+        # the theme default, ~14px) with 5 facets packed side by side in
+        # roughly half the page width once this chart sits next to its
+        # sibling (count vs percentage). At that width, longer population
+        # names ("cd8_t_cell", "cd4_t_cell", 10 characters) don't fit in
+        # their facet's share of that space and visually run into the
+        # neighboring facet's title. Confirmed directly against a real
+        # screenshot, not just suspected. A smaller, explicit font size
+        # plus slightly wider facet_col_spacing above (Plotly's default
+        # is 0.03) both make room without needing to abbreviate the
+        # population names themselves, which is what would actually fix
+        # a text-doesn't-fit problem versus e.g. rotating the text, which
+        # Plotly's facet annotations don't support cleanly the way axis
+        # tick labels do.
+        fig.for_each_annotation(
+            lambda a: a.update(text=a.text.split("=")[-1], font=dict(size=10))
+        )
     else:
         fig = px.bar(
             avg_table, x="population", y=y_col, color=color_col,
@@ -536,19 +576,28 @@ def render_avg_charts(avg_table: pd.DataFrame, color_col: str, color_map: dict, 
     response, or cohort, or timepoint). All bars, whether colored by
     population or by a comparison group, use marker_opacity=GROUP_FILL_ALPHA:
     the same fill opacity the boxplot uses, so the same color reads at
-    the same visual intensity in both chart types. No hatch pattern:
-    Plotly's default pattern_shape assigns the first category an
-    empty/solid pattern and the second a diagonal hatch, which reads as
-    "not fully filled in" rather than a deliberate texture, and the
-    Okabe-Ito color choices are already colorblind-safe on their own.
+    the same visual intensity in both chart types (no hatch pattern: an
+    earlier version used pattern_shape as a colorblind safety measure,
+    but Plotly's default pattern assigns the *first* category an
+    empty/solid pattern and the *second* a diagonal-hatch fill, which
+    reads as "not fully filled in" rather than as a deliberate texture,
+    removed in favor of just keeping the Okabe-Ito color choices
+    themselves colorblind-safe, which they already are).
 
-    group_order pins the legend/bar order for color_col explicitly:
-    without it, Plotly Express sorts a string column alphabetically,
-    which would put "Non-responder" before "Responder"."""
+    group_order pins the legend/bar order for color_col explicitly. This
+    matters: without it, Plotly Express sorts a string column's values
+    alphabetically by default, which silently put "Non-responder" before
+    "Responder" here (while the distribution boxplot elsewhere used an
+    explicit Responder-first order), a real inconsistency, not a
+    stylistic choice, caught by comparing the two side by side."""
     # Uses only the populations actually present in avg_table, not the
-    # full POPULATIONS constant: Plotly Express creates one x-axis
-    # category per category_orders entry even with zero matching rows,
-    # which would leave empty gaps for populations a filter excluded.
+    # full POPULATIONS constant. The same bug fixed earlier for
+    # render_boxplot's facets applies identically here: Plotly Express
+    # creates one x-axis category per category_orders entry even with
+    # zero matching rows, so a population-filtered cohort (e.g. just
+    # b_cell + cd4_t_cell selected) reserved x-axis space for all 5
+    # populations, leaving empty gaps where cd8_t_cell/nk_cell/monocyte
+    # would be -- confirmed directly against a real filtered chart.
     present_populations = [p for p in POPULATIONS if p in avg_table["population"].unique()]
     category_orders = {"population": present_populations}
     if group_order:
@@ -624,7 +673,8 @@ def render_avg_table_and_charts(
     """Average cell count/percentage table (+ download) and bar charts,
     given an already-built avg_table. Shared rendering so this section
     looks and behaves identically across every tab -- the table itself
-    (not just the charts) is always shown and always downloadable."""
+    (not just the charts) is always shown and always downloadable, which
+    an earlier version of By Date and Custom mode omitted."""
     if avg_table.empty:
         st.info("No data available for this cohort.")
         return
@@ -735,8 +785,8 @@ def render_comparison_stats_table(
 
 def render_n_group_messages(status: str, results: pd.DataFrame | None):
     """Shared rendering of compare_n_groups' / compare_populations_paired's
-    status cases, for any number of groups (the N-group counterpart of
-    render_stats_messages)."""
+    status cases -- generalizes render_stats_messages/the old
+    render_cohort_comparison_messages to an arbitrary number of groups."""
     if status == "insufficient_groups":
         st.info(
             "Fewer than 2 of the selected groups have any matching samples. "
@@ -761,10 +811,11 @@ def render_n_group_messages(status: str, results: pd.DataFrame | None):
 
 
 def render_n_group_boxplot(group_dfs: dict, stats_df: pd.DataFrame, colors: list, x_label: str = "group"):
-    """Boxplot for 2 or more arbitrary groups, faceted by population: a
-    thin wrapper that concatenates the group dataframes under an x_label
-    column and forwards to render_boxplot. Returns
-    (fig, present_populations), same as render_boxplot."""
+    """Boxplot for 2 or more arbitrary groups, faceted by population --
+    generalizes the old render_cohort_comparison_boxplot (which was fixed
+    at exactly 2 cohorts) to any number of groups via render_boxplot's own
+    N-group support. Returns (fig, present_populations), same as
+    render_boxplot -- this just forwards it."""
     frames = []
     for label, df in group_dfs.items():
         d = df.copy()
@@ -937,13 +988,43 @@ def filters_with_expander(full: pd.DataFrame, key_prefix: str, label: str = "Fil
     return filters
 
 
-if not DB_PATH.exists():
+def _db_has_data() -> bool:
+    """Checks not just that cell_counts.db exists, but that it actually
+    contains rows. A file that exists but is empty or only has an empty
+    schema (e.g. from a build that was interrupted between
+    sqlite3.connect creating the file and the inserts finishing, such as
+    a container restart, resource limit, or crash mid-build) would
+    otherwise be silently treated as "already built" forever afterward,
+    since load_data.py's build_database() creates the .db file the
+    instant it opens a connection, well before any data is written.
+    Confirmed directly: this exact failure mode produced a live
+    "0 subjects, 0 samples, 0 projects" app with a ValueError crashing
+    on int(full["age"].min()) (min of an empty column is NaN), because
+    the old check only asked "does the file exist," not "does it have
+    data," and a stale empty file always answered yes to the former."""
+    if not DB_PATH.exists():
+        return False
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            n = conn.execute("SELECT COUNT(*) FROM subjects").fetchone()[0]
+            return n > 0
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        # Missing table, corrupt file, etc. Anything that fails this
+        # check should be treated the same as "needs rebuilding," not
+        # as an unrelated crash.
+        return False
+
+
+if not _db_has_data():
     if CSV_PATH.exists():
-        # Self-initialize: this matters for cloud deployment (e.g. Streamlit
-        # Community Cloud) where there's no separate "run load_data.py
-        # first" step available. Locally, `make pipeline` / `python
-        # load_data.py` still works fine and this branch just won't fire
-        # since the .db will already exist.
+        # Self-initialize: this matters for cloud deployment (e.g.
+        # Streamlit Community Cloud) where there's no separate "run
+        # load_data.py first" step available. Locally, `make pipeline` /
+        # `python load_data.py` still works fine and this branch just
+        # won't fire since the .db will already exist and have data.
         with st.spinner("First run: building the database from cell-count.csv..."):
             from load_data import build_database
             build_database()
@@ -988,9 +1069,12 @@ tab_default, tab_resp, tab_pop, tab_date, tab_custom = st.tabs(
 # every tab's content on every rerun (just CSS-hides the inactive ones),
 # so widget state naturally survives switching tabs. A radio-driven
 # if/elif only instantiates the currently-selected branch's widgets each
-# run, and Streamlit clears session_state for any widget that disappears
-# from the script, which would silently reset filter selections on every
-# view switch.
+# run -- Streamlit clears session_state for any widget that disappears
+# from the script that way, so filter selections were being silently
+# reset every time you switched views. Confirmed directly (not assumed):
+# selecting specific populations in By Population mode, switching to
+# Default, then switching back reset the selection under the old radio
+# structure; verified this doesn't happen with tabs.
 
 
 # ---------- Default: single-cohort exploration (no comparison) ----------
@@ -1197,14 +1281,11 @@ with tab_date:
     st.subheader("Compare timepoints directly")
     st.caption(
         "Build a cohort using any combination of filters, then compare 2 "
-        "or more timepoints against each other, per population. Every "
-        "subject is sampled at every timepoint, so this is a paired "
-        "comparison: a Wilcoxon signed-rank test on each subject's own "
-        "change between timepoints (see the README's 'Statistical "
-        "approach'). Selecting 3+ timepoints tests every pair, "
-        "Bonferroni-corrected across all pairs and populations tested "
-        "together -- the correction gets stricter fast as more "
-        "timepoints are selected at once."
+        "or more timepoints against each other, per population. Selecting "
+        "3+ timepoints tests every pair, Bonferroni-corrected across all "
+        "pairs and populations tested together -- this correction gets "
+        "stricter fast as more timepoints are selected at once (see "
+        "compare_n_groups in analysis.py)."
     )
 
     filters = filters_with_expander(full, "date_mode", exclude={"time_from_treatment_start"})
@@ -1246,7 +1327,7 @@ with tab_date:
                 label: N_GROUP_COLOR_SEQUENCE[i % len(N_GROUP_COLOR_SEQUENCE)]
                 for i, label in enumerate(group_dfs.keys())
             }
-            status, results = compare_n_groups_paired(group_dfs)
+            status, results = compare_n_groups(group_dfs)
             render_n_group_messages(status, results)
 
             if status == "ok":
@@ -1286,7 +1367,7 @@ with tab_date:
 
                 st.write("")
                 with st.container(border=True):
-                    st.write("**Wilcoxon signed-rank results (paired)** (Bonferroni-corrected across all pairs and populations tested)")
+                    st.write("**Mann-Whitney U results** (Bonferroni-corrected across all pairs and populations tested)")
                     render_comparison_stats_table(results, "date_mode_stats", "date_comparison_stats.csv")
 
 
