@@ -535,27 +535,40 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
         fig.update_yaxes(matches=None, gridcolor="#000000", gridwidth=0.5)
         if yaxis_tickformat:
             fig.update_yaxes(tickformat=yaxis_tickformat)
-        fig.update_xaxes(showticklabels=False)
+        # showticklabels=False only hides the per-bar tick labels
+        # (Responder/Non-responder under each bar, redundant with the
+        # legend). It does NOT touch the axis title, which Plotly
+        # auto-populates from the x= column name independently for each
+        # of the 5 facets, so without title_text="" every facet showed
+        # its own "response_label"/"cohort"/"timepoint" title and, packed
+        # into a narrow shared row, they visually ran together into
+        # unreadable repeated text. Confirmed directly against a real
+        # screenshot: this was a second, separate bug from the population
+        # facet titles above the chart, not the same issue restated.
+        fig.update_xaxes(showticklabels=False, title_text="")
         fig.update_traces(marker_line_width=1.5, marker_opacity=GROUP_FILL_ALPHA)
         for trace in fig.data:
             trace.marker.line.color = trace.marker.color
-        # Facet titles default to no explicit font size (falls back to
-        # the theme default, ~14px) with 5 facets packed side by side in
-        # roughly half the page width once this chart sits next to its
-        # sibling (count vs percentage). At that width, longer population
-        # names ("cd8_t_cell", "cd4_t_cell", 10 characters) don't fit in
-        # their facet's share of that space and visually run into the
-        # neighboring facet's title. Confirmed directly against a real
-        # screenshot, not just suspected. A smaller, explicit font size
-        # plus slightly wider facet_col_spacing above (Plotly's default
-        # is 0.03) both make room without needing to abbreviate the
-        # population names themselves, which is what would actually fix
-        # a text-doesn't-fit problem versus e.g. rotating the text, which
-        # Plotly's facet annotations don't support cleanly the way axis
-        # tick labels do.
-        fig.for_each_annotation(
-            lambda a: a.update(text=a.text.split("=")[-1], font=dict(size=10))
-        )
+        # Facet titles (population names) are staggered onto two
+        # alternating heights rather than relying on font size and
+        # spacing alone. With 5 titles packed into roughly half the page
+        # width (this chart sits next to its sibling), every adjacent
+        # pair competes for the same narrow horizontal band, and a font
+        # small enough to reliably fit the longest names ("cd8_t_cell",
+        # "cd4_t_cell", 10 characters) either way stops being legible.
+        # Staggering means an adjacent pair no longer needs to fit
+        # side-by-side in that band at all: each title only needs to
+        # clear the *next* one over (two positions away), which has a
+        # full facet width of horizontal room between them. Confirmed
+        # directly that shrinking font size and adding facet_col_spacing
+        # alone were not enough (an earlier attempt still overlapped on
+        # the longest adjacent pair), so this is a structurally different
+        # fix, not another size tweak.
+        for i, a in enumerate(fig.layout.annotations):
+            a.text = a.text.split("=")[-1]
+            a.font = dict(size=11)
+            a.y = 1.09 if i % 2 == 0 else 1.02
+        fig.update_layout(margin=dict(t=90))
     else:
         fig = px.bar(
             avg_table, x="population", y=y_col, color=color_col,
