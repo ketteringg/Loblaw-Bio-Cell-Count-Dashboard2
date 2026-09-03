@@ -529,7 +529,6 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
         fig = px.bar(
             avg_table, x=color_col, y=y_col, color=color_col,
             color_discrete_map=color_map, facet_col="population", facet_col_wrap=5,
-            facet_col_spacing=0.045,
             title=title, labels={y_col: y_label}, category_orders=category_orders,
         )
         fig.update_yaxes(matches=None, gridcolor="#000000", gridwidth=0.5)
@@ -537,38 +536,33 @@ def _build_avg_bar_chart(avg_table, y_col, y_label, title, color_col, color_map,
             fig.update_yaxes(tickformat=yaxis_tickformat)
         # showticklabels=False only hides the per-bar tick labels
         # (Responder/Non-responder under each bar, redundant with the
-        # legend). It does NOT touch the axis title, which Plotly
-        # auto-populates from the x= column name independently for each
-        # of the 5 facets, so without title_text="" every facet showed
-        # its own "response_label"/"cohort"/"timepoint" title and, packed
-        # into a narrow shared row, they visually ran together into
-        # unreadable repeated text. Confirmed directly against a real
-        # screenshot: this was a second, separate bug from the population
-        # facet titles above the chart, not the same issue restated.
-        fig.update_xaxes(showticklabels=False, title_text="")
+        # legend). Population names move to each facet's x-axis title
+        # below, matching render_boxplot's already-working pattern for
+        # this exact problem, rather than the default top annotation.
+        fig.update_xaxes(showticklabels=False)
         fig.update_traces(marker_line_width=1.5, marker_opacity=GROUP_FILL_ALPHA)
         for trace in fig.data:
             trace.marker.line.color = trace.marker.color
-        # Facet titles (population names) are staggered onto two
-        # alternating heights rather than relying on font size and
-        # spacing alone. With 5 titles packed into roughly half the page
-        # width (this chart sits next to its sibling), every adjacent
-        # pair competes for the same narrow horizontal band, and a font
-        # small enough to reliably fit the longest names ("cd8_t_cell",
-        # "cd4_t_cell", 10 characters) either way stops being legible.
-        # Staggering means an adjacent pair no longer needs to fit
-        # side-by-side in that band at all: each title only needs to
-        # clear the *next* one over (two positions away), which has a
-        # full facet width of horizontal room between them. Confirmed
-        # directly that shrinking font size and adding facet_col_spacing
-        # alone were not enough (an earlier attempt still overlapped on
-        # the longest adjacent pair), so this is a structurally different
-        # fix, not another size tweak.
-        for i, a in enumerate(fig.layout.annotations):
-            a.text = a.text.split("=")[-1]
-            a.font = dict(size=11)
-            a.y = 1.09 if i % 2 == 0 else 1.02
-        fig.update_layout(margin=dict(t=90))
+        # Population names moved from the top facet-title annotation to
+        # each facet's own x-axis title (blanking the annotation
+        # entirely), matching render_boxplot's approach for the identical
+        # 5-facets-in-half-the-page-width problem. Two earlier attempts
+        # here both tried to make the top annotation fit (shrinking font,
+        # widening facet_col_spacing, then staggering onto two heights)
+        # and kept needing another round of tuning. The boxplot doesn't
+        # have this problem at all, and doesn't even set an explicit
+        # facet_col_spacing: an axis title is anchored to its own facet's
+        # domain, unlike a free-floating annotation, which visually
+        # overflows into the neighboring facet whenever its text is
+        # wider than that facet's own share of the width. Matching an
+        # already-working pattern instead of tuning a fundamentally
+        # collision-prone one.
+        fig.for_each_annotation(lambda a: a.update(text=""))
+        for i, pop in enumerate(category_orders["population"]):
+            xaxis_suffix = "" if i == 0 else str(i + 1)
+            fig.layout[f"xaxis{xaxis_suffix}"].title = dict(
+                text=pop, font=dict(size=11, color="#374151"),
+            )
     else:
         fig = px.bar(
             avg_table, x="population", y=y_col, color=color_col,
